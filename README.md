@@ -47,7 +47,14 @@ minimal-beamer                 →  LaTeX Beamer slides (reads project context a
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code/setup) (latest)
 - `ANTHROPIC_API_KEY` set
-- *For `ebsco-literature-pipeline`*: Chrome DevTools MCP running + CUFE WebVPN access
+- *For `ebsco-literature-pipeline`*: Chrome with remote debugging port open + CUFE WebVPN credentials
+  ```bash
+  # One-time setup
+  echo 'CUFE_USERNAME=学号' > ~/.cufe_credentials
+  echo 'CUFE_PASSWORD=密码' >> ~/.cufe_credentials
+  chmod 600 ~/.cufe_credentials
+  open -a "Google Chrome" --args --remote-debugging-port=9222
+  ```
 - *For `paper-note` and `minimal-beamer`*: LaTeX installation
   - macOS: `brew install --cask mactex` or `basictex`
   - Linux: `sudo apt install texlive-full latexmk`
@@ -90,14 +97,16 @@ project/
 ---
 
 ### `ebsco-literature-pipeline`
-End-to-end literature discovery and bulk PDF download.
+Literature discovery and bulk PDF download via EBSCO Search API.
 
-- **Discovery**: Semantic Scholar + OpenAlex + Crossref APIs + WebSearch (via bundled `bibliography_agent`)
-- **Download**: published OA versions via `curl`; EBSCO via CUFE WebVPN for the rest
-- **Journal scope filters**: All journals / Economics Top-5 / UTD24 / FT50
-- **Output**: `refs/*.pdf` + `refs/manifest.csv` + `refs/not_found.txt`
+- **Discovery**: EBSCO API via Chrome CDP — SO/DT field-code queries, journal-scoped, paginated
+- **Auto-login**: reads `~/.cufe_credentials`, fills CUFE CAS SSO form, persists session cookies
+- **Download**: parallel `Promise.all` fetch + `<a download>` with semantic names (`{Author}_{Year}_{Title}.pdf`)
+- **Journal scope**: All journals / Economics Top-5 / UTD24 / FT50
+- **Output**: `refs/*.pdf` (named) + `refs/papers.json` + `refs/manifest.csv`
+- **CLI**: `python3 scripts/ebsco_pipeline.py search|download`
 
-> Requires Chrome DevTools MCP and CUFE WebVPN access.
+> Requires Chrome `--remote-debugging-port=9222` and CUFE credentials in `~/.cufe_credentials`.
 
 ---
 
@@ -106,7 +115,7 @@ Reads all PDFs in `refs/` in parallel — one subagent per paper. Each subagent 
 
 - Reads: abstract + intro + conclusion only (fast)
 - Each note follows `templates/paper_note.md`
-- **Output**: `refs/notes/{idx}_{paper}.md` per paper + `refs/notes/digest.md`
+- **Output**: `refs/notes/{first_author}_{year}.md` per paper + `refs/notes/digest.md`
 
 ---
 
@@ -160,10 +169,10 @@ Builds a LaTeX Beamer presentation from a bundled minimal template. Detects proj
 
 | Path | Written by |
 |------|-----------|
-| `refs/*.pdf` | `ebsco-literature-pipeline` |
+| `refs/*.pdf` | `ebsco-literature-pipeline` (named: `{Author}_{Year}_{Title}.pdf`) |
+| `refs/papers.json` | `ebsco-literature-pipeline` |
 | `refs/manifest.csv` | `ebsco-literature-pipeline` |
-| `refs/not_found.txt` | `ebsco-literature-pipeline` |
-| `refs/notes/{idx}_*.md` | `lit-scout` |
+| `refs/notes/{first_author}_{year}.md` | `lit-scout` |
 | `refs/notes/digest.md` | `lit-scout` |
 | `refs/notes/deep_*.md` | `deep-read` |
 | `refs/notes/{slug}_note/` | `paper-note` |

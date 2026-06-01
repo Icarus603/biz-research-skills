@@ -478,15 +478,28 @@ async () => {
 
     results = cdp.eval(js2, await_promise=True, timeout_ms=300000)
 
+    download_names = {}
     for r in (results or []):
         if r.get("ok"):
             ok_count += 1
+            download_names[r['idx']] = r['name']
             print(f"[download] {r['idx']}/{total}: {r['name']} ({r.get('size',0)//1024}KB)")
         else:
             fail_count += 1
             print(f"[download] {r['idx']}/{total}: SKIP {r['name']} - {r.get('error','?')}")
 
-    print(f"[download] Done: {ok_count} downloaded, {fail_count} skipped (no access)")
+    # Move downloaded PDFs from ~/Downloads/ to output dir using exact JS filenames
+    if ok_count > 0:
+        dl_dir = os.path.expanduser("~/Downloads")
+        moved = 0
+        for name in download_names.values():
+            src = os.path.join(dl_dir, name)
+            if os.path.exists(src):
+                os.rename(src, os.path.join(abs_output, name))
+                moved += 1
+        if moved > 0:
+            print(f"[download] Moved {moved}/{ok_count} PDFs to {abs_output}/")
+
     return ok_count
 
 
