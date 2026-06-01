@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Usage: scaffold.sh <parent_dir> <project_name>
 # Creates the research repo structure and git init.
+# Tolerates target dir if it exists but is empty (or only has .git).
 
 set -euo pipefail
 
@@ -10,8 +11,13 @@ BASE="$PARENT/$NAME"
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 if [[ -e "$BASE" ]]; then
-  echo "ERROR: $BASE already exists" >&2
-  exit 1
+  # Count non-hidden, non-.git entries
+  content_count=$(find "$BASE" -mindepth 1 -maxdepth 1 ! -name '.git' 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$content_count" -gt 0 ]]; then
+    echo "ERROR: $BASE exists and is not empty ($content_count entries)" >&2
+    exit 1
+  fi
+  echo "NOTICE: $BASE exists but is empty — scaffolding in-place"
 fi
 
 mkdir -p "$BASE"/{data/raw,data/processed,code,output/tables,output/figures,output/logs,refs/notes,paper}
@@ -40,10 +46,14 @@ RDME
 # git init
 if command -v git &>/dev/null; then
   cd "$BASE"
-  git init -q
-  git add .gitignore README.md data/README.md code/README.md paper/README.md
-  git commit -q -m "chore: scaffold $NAME research repo"
-  echo "git: initialized"
+  if [[ -d .git ]]; then
+    echo "git: already initialized — skipping"
+  else
+    git init -q
+    git add .gitignore README.md data/README.md code/README.md paper/README.md
+    git commit -q -m "chore: scaffold $NAME research repo"
+    echo "git: initialized"
+  fi
 else
   echo "WARNING: git not found — skipped version control init"
 fi
