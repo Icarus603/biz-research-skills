@@ -1,6 +1,6 @@
 ---
 name: ebsco-literature-pipeline
-description: Literature discovery and bulk PDF download. EBSCO API primary search via Chrome CDP + parallel blob download. Zero MCP dependency for search — uses pure-Python CDP WebSocket client. Auto-login via credential injection with cookie persistence.
+description: Literature discovery and bulk PDF download via EBSCO Search API. Auto-starts Chrome, auto-login CUFE VPN, parallel PDF download with semantic naming. Triggers on: "find papers on X", "search literature on X", "download papers about X", "get me papers on X", "collect literature for X", "找论文", "搜文献", "下论文", "文献检索", or any research topic that implies needing paper PDFs. CRITICAL: Any request to find/search/collect/download academic papers IS a request to get PDFs — no "search-only" mode. Output is always PDF files + manifest.csv.
 ---
 
 # EBSCO Literature Pipeline
