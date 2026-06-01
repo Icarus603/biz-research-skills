@@ -505,6 +505,38 @@ async () => {
 
 # ── CLI ──────────────────────────────────────────────────────────
 
+def ensure_chrome(port: int = 9222, profile_dir: str = None):
+    """Ensure Chrome is running with remote debugging on the given port."""
+    import subprocess as _sp
+    # Check if Chrome debug port is already available
+    try:
+        import urllib.request
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2)
+        print(f"[chrome] Chrome already running on port {port}")
+        return
+    except Exception:
+        pass
+
+    # Start Chrome
+    if profile_dir is None:
+        profile_dir = os.path.expanduser("~/.cache/ebsco-pipeline/chrome-profile")
+    os.makedirs(profile_dir, exist_ok=True)
+    chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    if not os.path.exists(chrome_path):
+        # Try other common paths
+        for p in ["/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium"]:
+            if os.path.exists(p):
+                chrome_path = p
+                break
+    print(f"[chrome] Starting Chrome on port {port}...")
+    _sp.Popen([chrome_path, f"--remote-debugging-port={port}",
+               f"--user-data-dir={profile_dir}",
+               "--no-first-run", "--no-default-browser-check"],
+              stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+    time.sleep(4)
+    print("[chrome] Chrome ready.")
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="EBSCO Literature Pipeline")
@@ -528,6 +560,9 @@ def main():
     if not args.command:
         parser.print_help()
         sys.exit(1)
+
+    # Auto-start Chrome if needed
+    ensure_chrome()
 
     cdp = CDPClient()
     try:

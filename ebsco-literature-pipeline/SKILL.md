@@ -24,18 +24,15 @@ Topic
 ### One-time setup
 
 ```bash
-# 1. Create credentials file
+# One-time: create credentials file
 cat > ~/.cufe_credentials << EOF
 CUFE_USERNAME=你的学号
 CUFE_PASSWORD=你的密码
 EOF
 chmod 600 ~/.cufe_credentials
-
-# 2. Start Chrome with remote debugging
-open -a "Google Chrome" --args --remote-debugging-port=9222
 ```
 
-Chrome must be started ONCE per session. The pipeline auto-connects via CDP WebSocket on `ws://127.0.0.1:9222`.
+Chrome is auto-started by the pipeline on first run. No manual setup needed.
 
 ---
 
@@ -208,14 +205,23 @@ Complete API reference for EBSCO Search API accessed via CUFE WebVPN proxy.
 ## Quick Start
 
 ```bash
-# 1. One-time: credentials + start Chrome
+# 1. One-time: credentials only
 echo 'CUFE_USERNAME=学号' > ~/.cufe_credentials
 echo 'CUFE_PASSWORD=密码' >> ~/.cufe_credentials
 chmod 600 ~/.cufe_credentials
-open -a "Google Chrome" --args --remote-debugging-port=9222
-# (Log in once via SSO — credentials auto-saved)
 
-# 2. Search Top-5 econ journals for patent/innovation papers
+# 2. Just run — Chrome auto-starts, auto-logs in
+python3 scripts/ebsco_pipeline.py search "innovation OR patent OR R&D OR \"intellectual property\" OR inventor" \
+  --journals "American Economic Review,Quarterly Journal of Economics,Journal of Political Economy,Econometrica,Review of Economic Studies" \
+  --years 2022-2026 --max 500 --output ./papers/
+
+# 3. Download PDFs (parallel, named)
+python3 scripts/ebsco_pipeline.py download --manifest ./papers/papers.json
+
+# 4. Results
+ls ~/Downloads/*.pdf       # or --output dir after auto-move
+cat papers/manifest.csv    # Paper metadata
+```
 python3 scripts/ebsco_pipeline.py search "innovation OR patent OR R&D OR \"intellectual property\" OR inventor" \
   --journals "American Economic Review,Quarterly Journal of Economics,Journal of Political Economy,Econometrica,Review of Economic Studies" \
   --years 2022-2026 --max 500 --output ./papers/
