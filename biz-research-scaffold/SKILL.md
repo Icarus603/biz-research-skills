@@ -26,8 +26,6 @@ Decision table:
 
 Generic dirname list: `~`, `home`, `Desktop`, `Documents`, `code`, `dev`, `projects`, `research`, `work`, `src`, `root`, `tmp`, `Downloads`.
 
-Paper language signal from CWD path: if path contains Chinese characters → likely Chinese paper.
-
 ## Phase 1: Detect OS + Tools (merged)
 
 ```bash
@@ -52,7 +50,7 @@ Only ask what Phase 0 didn't resolve:
 |----------|---------|--------|
 | Project name | Inferred from CWD dirname, or stated in user message | Dirname generic, or user didn't state |
 | Primary tool | Exactly 1 analysis tool detected → auto-select | 0 detected, or 2+ detected |
-| Paper language | Inferred from CWD path (Chinese chars), user's CLAUDE.md language, or user stated | No signal |
+| Paper language | Stated in user message | Always ask — user choice, not inferrable from path/system locale |
 | Location | CWD empty + inferred name, or user gave path | Ambiguous — CWD non-empty, or user unclear |
 
 **If 0 tools detected**, list all options with install instructions:
