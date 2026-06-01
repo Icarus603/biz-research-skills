@@ -531,6 +531,7 @@ def ensure_chrome(port: int = 9222, profile_dir: str = None):
     print(f"[chrome] Starting Chrome on port {port}...")
     _sp.Popen([chrome_path, f"--remote-debugging-port={port}",
                f"--user-data-dir={profile_dir}",
+               "--headless=new",
                "--no-first-run", "--no-default-browser-check"],
               stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
     time.sleep(4)
