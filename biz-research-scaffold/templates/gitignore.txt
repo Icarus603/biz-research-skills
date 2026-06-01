@@ -1,0 +1,43 @@
+# Raw data — never commit
+data/raw/
+*.dta
+*.csv
+*.xlsx
+*.xls
+*.sas7bdat
+*.parquet
+*.feather
+
+# Stata
+*.smcl
+*.log
+~*.dta
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+
+# Python
+__pycache__/
+.venv/
+*.pyc
+.env
+dist/
+
+# LaTeX
+*.aux
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.out
+*.toc
+
+# Regeneratable output
+output/logs/
+
+# OS
+.DS_Store
+Thumbs.db

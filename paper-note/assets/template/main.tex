@@ -1,0 +1,182 @@
+\documentclass[11pt, a4paper]{article}
+
+% ─── Core packages ───────────────────────────────────────────────────────────
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{lmodern}
+
+% ─── Page geometry ───────────────────────────────────────────────────────────
+\usepackage[
+  top=2.5cm, bottom=2.5cm,
+  left=3cm,  right=3cm,
+  marginparwidth=2cm
+]{geometry}
+
+% ─── Mathematics ─────────────────────────────────────────────────────────────
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{mathtools}
+
+% ─── Tables ──────────────────────────────────────────────────────────────────
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+
+% ─── Lists ───────────────────────────────────────────────────────────────────
+\usepackage{enumitem}
+\setlist[itemize]{noitemsep, topsep=4pt}
+\setlist[enumerate]{noitemsep, topsep=4pt}
+
+% ─── Typography ──────────────────────────────────────────────────────────────
+\usepackage{setspace}
+\setstretch{1.15}
+\usepackage{parskip}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+
+% ─── Section styling (minimal) ───────────────────────────────────────────────
+\usepackage{titlesec}
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.5em}{}[\vspace{-4pt}\rule{\linewidth}{0.4pt}]
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.5em}{}
+\titleformat{\subsubsection}{\normalsize\itshape}{\thesubsubsection}{0.5em}{}
+\titlespacing*{\section}{0pt}{14pt}{6pt}
+\titlespacing*{\subsection}{0pt}{10pt}{4pt}
+
+% ─── Header / footer ─────────────────────────────────────────────────────────
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancyhead[L]{\small\textit{PAPER TITLE}}   % ← replace
+\fancyhead[R]{\small\textit{AUTHOR YEAR}}   % ← replace
+\fancyfoot[C]{\small\thepage}
+
+% ─── Hyperlinks ──────────────────────────────────────────────────────────────
+\usepackage[
+  colorlinks=true,
+  linkcolor=black,
+  citecolor=black,
+  urlcolor=black
+]{hyperref}
+
+% ─── CJK (uncomment if Chinese content needed) ───────────────────────────────
+% \usepackage{xeCJK}
+
+% ─── Custom environments ─────────────────────────────────────────────────────
+\newtheorem{finding}{Finding}
+\newtheorem{limitation}{Limitation}
+
+% ═════════════════════════════════════════════════════════════════════════════
+\begin{document}
+
+% ─── Title block ─────────────────────────────────────────────────────────────
+\begin{center}
+  {\Large\bfseries PAPER TITLE}\\[6pt]    % ← replace
+  {\normalsize AUTHORS}\\[3pt]            % ← replace
+  {\small JOURNAL, YEAR}\\[3pt]           % ← replace
+  \rule{0.5\linewidth}{0.4pt}\\[3pt]
+  {\small\textit{Reading note by} YOUR NAME \quad \today}  % ← replace
+\end{center}
+
+\vspace{8pt}
+
+% ─── 1. Core Argument ────────────────────────────────────────────────────────
+\section{核心论证}
+
+\textbf{研究问题}
+
+\textbf{论证链}
+
+\textbf{核心贡献}
+
+% ─── 2. Research Design ──────────────────────────────────────────────────────
+\section{研究设计}
+
+\subsection{方法概述}
+
+\subsection{识别策略}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\linewidth}{lXl}
+\toprule
+威胁 & 作者应对 & 充分？ \\
+\midrule
+ &  &  \\
+\bottomrule
+\end{tabularx}
+\caption{识别策略潜在威胁}
+\end{table}
+
+% ─── 3. Data ─────────────────────────────────────────────────────────────────
+\section{数据}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\linewidth}{llXl}
+\toprule
+变量 & 类型 & 构建方式 & 潜在问题 \\
+\midrule
+ &  &  &  \\
+\bottomrule
+\end{tabularx}
+\caption{关键变量}
+\end{table}
+
+% ─── 4. Results ──────────────────────────────────────────────────────────────
+\section{核心结果}
+
+\subsection{主要发现}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\linewidth}{lXll}
+\toprule
+表/图 & 问题 & 核心结果 & 解读 \\
+\midrule
+ &  &  &  \\
+\bottomrule
+\end{tabularx}
+\caption{主要结果}
+\end{table}
+
+\subsection{稳健性检验}
+
+\subsection{机制检验}
+
+\subsection{异质性分析}
+
+% ─── 5. Critical Evaluation ──────────────────────────────────────────────────
+\section{批判性评估}
+
+\subsection{方法论问题}
+
+\subsection{外部效度}
+
+\subsection{与文献的张力}
+
+% ─── 6. Idea Seeds ───────────────────────────────────────────────────────────
+\section{延伸方向}
+
+\begin{enumerate}
+  \item \textbf{Seed 1: TITLE}\\
+    \textit{逻辑}: \\
+    \textit{RQ}: \\
+    \textit{Y / X / 识别}: \\
+    \textit{所需数据}: \\
+    \textit{难点}:
+
+  \item \textbf{Seed 2: TITLE}\\
+    同上结构
+
+  \item \textbf{Seed 3: TITLE}\\
+    同上结构
+\end{enumerate}
+
+% ─── 7. Replication Notes ────────────────────────────────────────────────────
+\section{复现要点}
+
+\end{document}
