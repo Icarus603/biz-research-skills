@@ -1,0 +1,17 @@
+{
+  "name": "biz-research-skills",
+  "owner": {
+    "name": "Icarus Liu",
+    "url": "https://github.com/Icarus603"
+  },
+  "description": "Research skill suite for business/social science — literature discovery, reading, topic selection, and presentations.",
+  "plugins": [
+    {
+      "name": "biz-research-skills",
+      "source": "./",
+      "description": "8 skills covering the full research workflow from project setup to presentation.",
+      "version": "1.0.0",
+      "license": "MIT"
+    }
+  ]
+}

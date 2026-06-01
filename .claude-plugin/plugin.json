@@ -1,0 +1,22 @@
+{
+  "name": "biz-research-skills",
+  "version": "1.0.0",
+  "description": "Claude Code skill suite for academic research in business and social science. Full workflow: project scaffold, literature discovery and download, parallel reading digest, deep paper reading, data feasibility assessment, topic selection, and presentations.",
+  "author": {
+    "name": "Icarus Liu",
+    "url": "https://github.com/Icarus603"
+  },
+  "homepage": "https://github.com/Icarus603/biz-research-skills",
+  "repository": "https://github.com/Icarus603/biz-research-skills",
+  "license": "MIT",
+  "keywords": [
+    "research",
+    "economics",
+    "finance",
+    "business",
+    "literature-review",
+    "academic",
+    "scaffold",
+    "beamer"
+  ]
+}
