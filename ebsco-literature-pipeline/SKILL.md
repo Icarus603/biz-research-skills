@@ -1,6 +1,6 @@
 ---
 name: ebsco-literature-pipeline
-description: Literature discovery and bulk PDF download via EBSCO Search API. Auto-starts Chrome, auto-login CUFE VPN, parallel PDF download with semantic naming. Triggers on: "find papers on X", "search literature on X", "download papers about X", "get me papers on X", "collect literature for X", "找论文", "搜文献", "下论文", "文献检索", or any research topic that implies needing paper PDFs. CRITICAL: Any request to find/search/collect/download academic papers IS a request to get PDFs — no "search-only" mode. Output is always PDF files + manifest.csv.
+description: Literature discovery and bulk PDF download via EBSCO Search API. Auto-starts Chrome, auto-login CUFE VPN, parallel PDF download. CRITICAL: ANY request to find, search, collect, or download academic papers IS a request to get PDFs on local disk. No "search-only" mode. Output is always PDF files + manifest.csv. Triggers on any of: 找论文 搜文献 下论文 文献检索 搜论文 下载论文 找文献 找文章 论文搜索 文献收集 查论文 帮我找 帮我搜找 帮我下载 找一下 搜索一下 下载一下 find papers search literature download papers get papers collect literature paper PDF bulk download 文献 论文.
 ---
 
 # EBSCO Literature Pipeline
