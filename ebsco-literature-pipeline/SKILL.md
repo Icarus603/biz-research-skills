@@ -46,11 +46,11 @@ Use Semantic Scholar API to find papers on: {topic} [{journal_filter if any}]
 
 Search strategy:
 1. Formulate 3-5 different keyword combinations (synonyms, related terms, different phrasings)
-2. For each combination, query: GET https://api.semanticscholar.org/graph/v1/paper/search?query={url_encoded}&limit=30&fields=title,authors,year,externalIds,venue,publicationDate,openAccessPdf
+2. For each combination, query:
+   curl -s -H "x-api-key: $S2_API_KEY" "https://api.semanticscholar.org/graph/v1/paper/search?query={url_encoded}&limit=30&fields=title,authors,year,externalIds,venue,publicationDate,openAccessPdf"
+   (if S2_API_KEY not set, omit -H header — still works at 1 req/s)
 3. Merge all results, deduplicate by paperId
-4. Also try the "bulk" endpoint if rate limit allows: POST /graph/v1/paper/search/bulk
-
-Rate limit: 1 req/s (no key), 10 req/s (with S2_API_KEY env var). Respect with sleep.
+4. Rate: with key → 10 req/s, sleep 0.2s between queries. Without → 1 req/s, sleep 1.1s.
 
 Return ONLY a JSON array. For each paper include:
 - title, first_author (first author name only), year, venue (journal name), doi, oa_url (openAccessPdf.url if available), s2_id (paperId), source: "s2"
@@ -62,11 +62,11 @@ Use OpenAlex API to find papers on: {topic} [{journal_filter if any}]
 
 Search strategy:
 1. Formulate 3-5 keyword combinations
-2. Query: GET https://api.openalex.org/works?search={url_encoded}&per-page=30&select=id,title,authorships,publication_year,doi,primary_location,open_access
+2. Query: curl -s "https://api.openalex.org/works?search={url_encoded}&per-page=30&mailto=user@example.com&select=id,title,authorships,publication_year,doi,primary_location,open_access"
+   CRITICAL: always include &mailto=user@example.com — gets 10 req/s instead of 1. No auth needed.
 3. If journal filter active, also filter by primary_location.source.display_name
 4. For each hit, extract oa_url from open_access.oa_url if available
-
-Rate limit: 10 req/s with mailto param. Add &mailto=user@example.com to URL.
+5. Rate: 10 req/s with mailto. 5 queries × 0.2s sleep = fine. Don't over-engineer.
 
 Return ONLY a JSON array. For each paper include:
 - title, first_author, year, venue, doi, oa_url, s2_id (null — OpenAlex IDs differ), source: "openalex"
@@ -78,10 +78,10 @@ Use Crossref API to find papers on: {topic} [{journal_filter if any}]
 
 Search strategy:
 1. Formulate 3-5 keyword combinations
-2. Query: GET https://api.crossref.org/works?query={url_encoded}&rows=30&filter=type:journal-article
+2. Query: curl -s -H "User-Agent: mailto:user@example.com (https://api.crossref.org)" "https://api.crossref.org/works?query={url_encoded}&rows=30&filter=type:journal-article"
+   CRITICAL: always set User-Agent with mailto — gets 10 req/s. No auth/registration needed.
 3. If journal filter, add &filter=issn:{issn_list} or filter by container-title in results
-
-Rate limit: ~5 req/s (anonymous). Add User-Agent with mailto.
+4. Rate: 10 req/s with polite User-Agent. 5 queries sleep 0.2s between.
 
 Return ONLY a JSON array. For each paper include:
 - title (first element of title array), first_author (given + family of first author), year (from issued.date-parts[0][0]), venue (container-title), doi, oa_url (from link with content-type: application/pdf), s2_id (null), source: "crossref"
