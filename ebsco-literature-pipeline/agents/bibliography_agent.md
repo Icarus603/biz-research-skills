@@ -59,52 +59,41 @@ Use python-Levenshtein or implement:
 ratio = 1 - (edit_distance / max(len(a), len(b)))
 ```
 
-## Step 3: Three-Index Triangulation
+## Step 3: S2 Batch Enrichment (DOI → s2_id + oa_url)
 
-For each deduplicated paper, verify existence across three bibliographic indexes: Semantic Scholar, OpenAlex, Crossref.
+S2 is NOT used for keyword search (rate-limited). Use it here ONLY for batch enrichment via DOI.
 
-Use bash+curl to query each API. Protocols are in `ebsco-literature-pipeline/references/`:
+Collect all papers with non-null DOI. Send in batches of 100:
 
-### Semantic Scholar check:
 ```bash
-# If s2_id already known from search:
-curl -s "https://api.semanticscholar.org/graph/v1/paper/{s2_id}?fields=title"
+# Build JSON body with up to 100 DOIs:
+# {"ids": ["DOI:10.1257/aer.20231234", "DOI:10.1086/678494", ...]}
 
-# If no s2_id but doi exists:
-curl -s "https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}?fields=title"
-
-# If neither, title search:
-curl -s "https://api.semanticscholar.org/graph/v1/paper/search?query={url_encoded_title}&limit=3&fields=title"
-```
-Match: returned title Levenshtein ≥ 0.70 against query title → `s2_matched: true`
-
-### OpenAlex check:
-```bash
-# DOI lookup:
-curl -s "https://api.openalex.org/works/doi:{doi}?select=id,title"
-
-# Title search:
-curl -s "https://api.openalex.org/works?search={url_encoded_title}&per-page=3&select=id,title"
-```
-Match: returned title Levenshtein ≥ 0.70 → `openalex_matched: true`
-
-### Crossref check:
-```bash
-# DOI lookup:
-curl -s "https://api.crossref.org/works/{doi}"
-
-# Title search:
-curl -s "https://api.crossref.org/works?query.title={url_encoded_title}&rows=3"
-```
-Match: returned title Levenshtein ≥ 0.70 → `crossref_matched: true`
-
-### Triangulation result:
-```
-matched_count = s2_matched + openalex_matched + crossref_matched
-not_found = (matched_count == 0)
+curl -s \
+  -H "x-api-key: $S2_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"ids": ["DOI:10.xxxx/xxxx", ...]}' \
+  "https://api.semanticscholar.org/graph/v1/paper/batch?fields=paperId,openAccessPdf,citationCount"
 ```
 
-If an API is unreachable (5xx, timeout, rate limit), omit that index — don't count it as unmatched. `not_found` is true only when ALL reachable indexes return no match.
+- If `$S2_API_KEY` not set: omit `-H "x-api-key: ..."` — still works but shared pool (may 429)
+- Rate: sleep 1.1s between batch calls (1 req/s limit on `/paper/batch`)
+- On 429: skip remaining batches, continue with what was fetched
+- On match: fill `s2_id = paperId`, fill `oa_url = openAccessPdf.url` if currently null
+
+Papers with no DOI: skip S2 enrichment, leave `s2_id: null`.
+
+### Existence result:
+```
+not_found = true  only if:
+  - paper has no DOI, AND
+  - paper was found by ONLY 1 source AND that source is websearch (unreliable)
+  
+not_found = false if:
+  - paper has DOI (verifiable), OR
+  - found by ≥2 independent sources, OR
+  - found by openalex or crossref (API-verified)
+```
 
 ## Step 4: Enrich OA URLs
 

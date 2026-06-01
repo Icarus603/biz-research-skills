@@ -38,125 +38,195 @@ For each subagent below, include the journal filter (if any) in the query instru
 
 ---
 
-### Spawn these 7 subagents IN PARALLEL (one message, all Agent tool calls):
+### Spawn these subagents IN PARALLEL (one message, all Agent tool calls):
 
-#### Subagent 1: Semantic Scholar API Search
-```
-Use Semantic Scholar API to find papers on: {topic} [{journal_filter if any}]
+**OpenAlex is the primary search engine** — 100 req/s independent quota, 240M papers, no key needed.
+**Spin as many OpenAlex agents as the topic warrants** — each agent covers a different angle/keyword dimension.
+**Minimum 9 agents total. No upper limit.**
 
-Search strategy:
-1. Formulate 3-5 different keyword combinations (synonyms, related terms, different phrasings)
-2. For each combination, query:
-   curl -s -H "x-api-key: $S2_API_KEY" "https://api.semanticscholar.org/graph/v1/paper/search?query={url_encoded}&limit=30&fields=title,authors,year,externalIds,venue,publicationDate,openAccessPdf"
-   (if S2_API_KEY not set, omit -H header — still works at 1 req/s)
-3. Merge all results, deduplicate by paperId
-4. Rate: with key → 10 req/s, sleep 0.2s between queries. Without → 1 req/s, sleep 1.1s.
+---
 
-Return ONLY a JSON array. For each paper include:
-- title, first_author (first author name only), year, venue (journal name), doi, oa_url (openAccessPdf.url if available), s2_id (paperId), source: "s2"
-```
-
-#### Subagent 2: OpenAlex API Search
+#### OpenAlex Agent 1: Core Keywords
 ```
 Use OpenAlex API to find papers on: {topic} [{journal_filter if any}]
 
-Search strategy:
-1. Formulate 3-5 keyword combinations
-2. Query: curl -s "https://api.openalex.org/works?search={url_encoded}&per-page=30&mailto=user@example.com&select=id,title,authorships,publication_year,doi,primary_location,open_access"
-   CRITICAL: always include &mailto=user@example.com — gets 10 req/s instead of 1. No auth needed.
-3. If journal filter active, also filter by primary_location.source.display_name
-4. For each hit, extract oa_url from open_access.oa_url if available
-5. Rate: 10 req/s with mailto. 5 queries × 0.2s sleep = fine. Don't over-engineer.
+Your keyword angle: CORE TERMS — the most direct phrases describing the topic.
+Formulate 5-8 queries using the primary terminology. Think: exact topic phrase, main noun phrases, standard academic terms.
 
-Return ONLY a JSON array. For each paper include:
-- title, first_author, year, venue, doi, oa_url, s2_id (null — OpenAlex IDs differ), source: "openalex"
+For each query:
+curl -s "https://api.openalex.org/works?search={url_encoded_query}&per-page=50&mailto=user@example.com&select=id,title,authorships,publication_year,doi,primary_location,open_access"
+
+CRITICAL: always include &mailto=user@example.com — polite pool, stable access.
+Sleep 0.1s between queries (100 req/s limit, single user).
+
+If journal filter active: after fetching, filter results where primary_location.source.display_name matches journal list.
+Extract oa_url from open_access.oa_url when available.
+
+Return ONLY a JSON array. Each paper:
+{ "title": "...", "first_author": "...", "year": 2024, "venue": "...", "doi": "...", "oa_url": "...", "s2_id": null, "source": "openalex1" }
 ```
 
-#### Subagent 3: Crossref API Search
+#### OpenAlex Agent 2: Synonyms & Related Terms
+```
+Use OpenAlex API to find papers on: {topic} [{journal_filter if any}]
+
+Your keyword angle: SYNONYMS & RELATED TERMS — different words for the same concept.
+Think: alternative labels, near-synonyms, umbrella terms, sub-concepts. Do NOT repeat queries from Agent 1.
+
+For each query:
+curl -s "https://api.openalex.org/works?search={url_encoded_query}&per-page=50&mailto=user@example.com&select=id,title,authorships,publication_year,doi,primary_location,open_access"
+
+Sleep 0.1s between queries.
+
+Return ONLY a JSON array. Each paper:
+{ "title": "...", "first_author": "...", "year": 2024, "venue": "...", "doi": "...", "oa_url": "...", "s2_id": null, "source": "openalex2" }
+```
+
+#### OpenAlex Agent 3: Methodological Terms
+```
+Use OpenAlex API to find papers on: {topic} [{journal_filter if any}]
+
+Your keyword angle: METHODS & EMPIRICAL APPROACHES — econometric methods, identification strategies, data sources typically used to study this topic.
+Think: "difference-in-differences {topic}", "regression discontinuity {topic}", "randomized experiment {topic}", "panel data {topic}", "{topic} natural experiment", "{topic} instrumental variable".
+
+For each query:
+curl -s "https://api.openalex.org/works?search={url_encoded_query}&per-page=50&mailto=user@example.com&select=id,title,authorships,publication_year,doi,primary_location,open_access"
+
+Sleep 0.1s between queries.
+
+Return ONLY a JSON array. Each paper:
+{ "title": "...", "first_author": "...", "year": 2024, "venue": "...", "doi": "...", "oa_url": "...", "s2_id": null, "source": "openalex3" }
+```
+
+#### OpenAlex Agent 4: Outcome & Mechanism Terms
+```
+Use OpenAlex API to find papers on: {topic} [{journal_filter if any}]
+
+Your keyword angle: OUTCOMES & MECHANISMS — the dependent variables, outcomes, channels, or mechanisms being studied.
+Think: what does this topic affect? What does it explain? E.g. if topic is "AI and labor", outcomes include "wages", "employment", "inequality", "skill premium".
+
+For each query:
+curl -s "https://api.openalex.org/works?search={url_encoded_query}&per-page=50&mailto=user@example.com&select=id,title,authorships,publication_year,doi,primary_location,open_access"
+
+Sleep 0.1s between queries.
+
+Return ONLY a JSON array. Each paper:
+{ "title": "...", "first_author": "...", "year": 2024, "venue": "...", "doi": "...", "oa_url": "...", "s2_id": null, "source": "openalex4" }
+```
+
+#### OpenAlex Agent 5: Context & Setting Terms
+```
+Use OpenAlex API to find papers on: {topic} [{journal_filter if any}]
+
+Your keyword angle: CONTEXT & SETTING — specific countries, industries, time periods, or institutional settings relevant to this topic.
+Think: China context, US context, specific industries, firm-level vs. aggregate, historical periods.
+
+For each query:
+curl -s "https://api.openalex.org/works?search={url_encoded_query}&per-page=50&mailto=user@example.com&select=id,title,authorships,publication_year,doi,primary_location,open_access"
+
+Sleep 0.1s between queries.
+
+Return ONLY a JSON array. Each paper:
+{ "title": "...", "first_author": "...", "year": 2024, "venue": "...", "doi": "...", "oa_url": "...", "s2_id": null, "source": "openalex5" }
+```
+
+#### OpenAlex Agent 6: Recent & Seminal Works
+```
+Use OpenAlex API to find papers on: {topic} [{journal_filter if any}]
+
+Your keyword angle: TWO TEMPORAL SWEEPS.
+
+Sweep A — RECENT (2022–2026): add publication_year filter.
+curl -s "https://api.openalex.org/works?search={url_encoded_query}&filter=publication_year:2022-2026&per-page=50&mailto=user@example.com&select=id,title,authorships,publication_year,doi,primary_location,open_access"
+
+Sweep B — SEMINAL (cited classics): sort by citation count descending.
+curl -s "https://api.openalex.org/works?search={url_encoded_query}&sort=cited_by_count:desc&per-page=50&mailto=user@example.com&select=id,title,authorships,publication_year,doi,primary_location,open_access,cited_by_count"
+
+Use 3 core keyword queries for each sweep. Sleep 0.1s between requests.
+
+Return ONLY a JSON array. Each paper:
+{ "title": "...", "first_author": "...", "year": 2024, "venue": "...", "doi": "...", "oa_url": "...", "s2_id": null, "source": "openalex6" }
+```
+
+---
+
+#### Crossref Agent: DOI-Authoritative Search
 ```
 Use Crossref API to find papers on: {topic} [{journal_filter if any}]
 
-Search strategy:
-1. Formulate 3-5 keyword combinations
-2. Query: curl -s -H "User-Agent: mailto:user@example.com (https://api.crossref.org)" "https://api.crossref.org/works?query={url_encoded}&rows=30&filter=type:journal-article"
-   CRITICAL: always set User-Agent with mailto — gets 10 req/s. No auth/registration needed.
-3. If journal filter, add &filter=issn:{issn_list} or filter by container-title in results
-4. Rate: 10 req/s with polite User-Agent. 5 queries sleep 0.2s between.
+Crossref is the DOI registry of record — strongest for published journal articles.
+Formulate 5 keyword combinations.
 
-Return ONLY a JSON array. For each paper include:
-- title (first element of title array), first_author (given + family of first author), year (from issued.date-parts[0][0]), venue (container-title), doi, oa_url (from link with content-type: application/pdf), s2_id (null), source: "crossref"
+For each query:
+curl -s -H "User-Agent: mailto:user@example.com (https://api.crossref.org)" \
+  "https://api.crossref.org/works?query={url_encoded}&rows=50&filter=type:journal-article"
+
+CRITICAL: User-Agent with mailto = polite pool = 10 req/s. No registration needed.
+If journal filter: add &filter=container-title:{journal_name} (URL-encoded) for key journals.
+Sleep 0.15s between queries.
+
+Extract: title[0], first author (given+family), issued.date-parts[0][0] as year, container-title[0] as venue, DOI, links[].URL where content-type=application/pdf as oa_url.
+
+Return ONLY a JSON array. Each paper:
+{ "title": "...", "first_author": "...", "year": 2024, "venue": "...", "doi": "...", "oa_url": "...", "s2_id": null, "source": "crossref" }
 ```
 
-#### Subagent 4: WebSearch #1 — Broad Academic Search
+---
+
+#### WebSearch Agent 1: Broad Academic Search
 ```
 Use WebSearch tool to find academic papers on: {topic} [{journal_filter if any}]
 
-Search strategy — run ALL of these queries (minimum 5):
-1. "{topic} academic paper site:scholar.google.com OR site:semanticscholar.org"
-2. "{topic} journal article DOI"
+Run ALL queries:
+1. "{topic} journal article empirical evidence"
+2. "{topic} academic paper DOI"
 3. "{topic} research paper PDF"
-4. "{topic} literature review"
-5. "{topic} empirical study"
-6. "{topic} {synonym1}"
-7. "{topic} {synonym2}"
+4. "{topic} literature review survey"
+5. "{topic} site:semanticscholar.org"
+6. "{topic} {synonym1} research"
+7. "{topic} {synonym2} study"
 
-For each search result page, use WebFetch to extract paper titles, authors, years, venues, and DOIs.
-Prioritize .edu, .org, academic publisher domains.
+For promising results use WebFetch to extract full paper metadata (title, author, year, venue, DOI).
 
-Return ONLY a JSON array. For each paper include:
-- title, first_author, year, venue, doi, oa_url (direct PDF link if found), s2_id (null), source: "websearch1"
+Return ONLY a JSON array. Each paper:
+{ "title": "...", "first_author": "...", "year": 2024, "venue": "...", "doi": "...", "oa_url": "...", "s2_id": null, "source": "websearch1" }
 ```
 
-#### Subagent 5: WebSearch #2 — Complementary Keywords & Grey Literature
+#### WebSearch Agent 2: Working Papers & Grey Literature
 ```
-Use WebSearch tool to find academic papers on: {topic} [{journal_filter if any}]
+Use WebSearch tool to find papers on: {topic} [{journal_filter if any}]
 
-Search strategy — use DIFFERENT keywords from Subagent 4. Run ALL:
+Run ALL queries (different from Agent 1):
 1. "{topic} SSRN working paper"
 2. "{topic} NBER working paper"
-3. "{topic} RePEc"
-4. "{topic} conference proceedings"
-5. "{topic} dissertation thesis"
+3. "{topic} CEPR discussion paper"
+4. "{topic} IZA discussion paper"
+5. "{topic} working paper site:nber.org OR site:ssrn.com OR site:iza.org"
 6. "{topic} recent 2024 2025 2026"
-7. "{topic} seminal influential"
+7. "{topic} seminal influential highly cited"
 
-Also search in Chinese if topic is relevant: "{topic_chinese} 学术论文"
-
-Return ONLY a JSON array. For each paper include:
-- title, first_author, year, venue, doi, oa_url, s2_id (null), source: "websearch2"
+Return ONLY a JSON array. Each paper:
+{ "title": "...", "first_author": "...", "year": 2024, "venue": "...", "doi": "...", "oa_url": "...", "s2_id": null, "source": "websearch2" }
 ```
 
-#### Subagent 6: WebSearch #3 — Top Journal Targeted Search
+#### WebSearch Agent 3: Top Journal Targeted
 ```
 Use WebSearch tool to find papers on: {topic} [{journal_filter if any}]
 
 IF journal filter is active:
-  For EACH journal in the filter list, search: "{topic} site:{journal_domain}" or "{topic} {journal_name}"
-  Example: "{topic} site:aeaweb.org" for AER
+  For EACH journal in filter, run: "{topic} {journal_name}"
+  Also try: "{topic} site:{publisher_domain}" for journals with known domains
+  (AER→aeaweb.org, JPE/QJE→journals.uchicago.edu, RES→academic.oup.com, Econometrica→onlinelibrary.wiley.com)
 
-IF no journal filter (all journals):
-  Search top journals by field relevance:
-  - Economics: "site:aeaweb.org OR site:journals.uchicago.edu/jpe {topic}"
-  - Finance: "site:onlinelibrary.wiley.com/journal/15406261 {topic}"
-  - Management: "site:journals.aom.org {topic}"
-  - General: "{topic} Q1 journal top tier"
+IF no journal filter:
+  Run by field:
+  - "{topic} American Economic Review OR Quarterly Journal of Economics OR Journal of Political Economy"
+  - "{topic} Journal of Finance OR Review of Financial Studies OR Journal of Financial Economics"
+  - "{topic} Management Science OR Strategic Management Journal OR Academy of Management Journal"
+  - "{topic} top journal Q1 published"
 
-Return ONLY a JSON array. For each paper include:
-- title, first_author, year, venue, doi, oa_url, s2_id (null), source: "websearch3"
-```
-
-#### Subagent 7: Google Scholar WebFetch
-```
-Use WebFetch to search Google Scholar for: {topic} [{journal_filter if any}]
-
-Strategy:
-1. WebFetch: https://scholar.google.com/scholar?q={url_encoded_topic}&num=20&as_sdt=0,5
-2. Parse results: titles, authors, years, venues, citation counts
-3. Try 2-3 keyword variations
-4. If blocked/hit CAPTCHA, fall back to WebSearch with "site:scholar.google.com {topic}"
-
-Return ONLY a JSON array. For each paper include:
-- title, first_author, year, venue, doi, oa_url, s2_id (null), source: "googlescholar"
+Return ONLY a JSON array. Each paper:
+{ "title": "...", "first_author": "...", "year": 2024, "venue": "...", "doi": "...", "oa_url": "...", "s2_id": null, "source": "websearch3" }
 ```
 
 ---
@@ -188,7 +258,7 @@ After ALL subagents return, spawn the aggregation agent:
 Read and execute `agents/bibliography_agent.md` as the Aggregation Agent.
 
 **Input to aggregation agent**:
-1. The combined JSON arrays from all 7 subagents
+1. The combined JSON arrays from all parallel subagents
 2. The original topic and journal filter
 3. Reference files: `references/semantic_scholar_api_protocol.md`, `references/openalex_api_protocol.md`, `references/crossref_api_protocol.md`
 
@@ -197,16 +267,22 @@ Read and execute `agents/bibliography_agent.md` as the Aggregation Agent.
 2. Normalize titles (lowercase, strip punctuation, remove extra whitespace)
 3. Deduplicate by this priority chain:
    a. Same DOI → merge, keep most complete record
-   b. Same S2 ID → merge
-   c. Title similarity ≥ 0.85 (Levenshtein ratio) AND same first_author → merge
-   d. Title similarity ≥ 0.90 → merge (with warning)
-4. Run three-index triangulation:
-   - For each paper, verify existence across S2, OpenAlex, and Crossref APIs
-   - Paper found in ≥ 1 index → `not_found: false`
-   - Paper found in 0 indexes → `not_found: true`
-5. Sort by year descending, then first_author
-6. Assign sequential idx starting from 1
-7. Enrich: for papers missing oa_url, try to find one via S2 openAccessPdf field
+   b. Title similarity ≥ 0.85 (Levenshtein ratio) AND same first_author → merge
+   c. Title similarity ≥ 0.90 → merge (with warning)
+4. **S2 batch enrichment** — for all papers with DOI, call S2 in batches of 100:
+   ```bash
+   curl -s -H "x-api-key: $S2_API_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"ids": ["DOI:10.xxxx/xxx", ...]}' \
+     "https://api.semanticscholar.org/graph/v1/paper/batch?fields=paperId,openAccessPdf,citationCount"
+   ```
+   - Fill in `s2_id` (paperId) for matched papers
+   - Fill in `oa_url` from `openAccessPdf.url` if currently null
+   - Rate: 1 req/s on `/paper/batch` endpoint. Batch 100 DOIs per call = efficient.
+   - If S2_API_KEY not set or 429: skip enrichment, continue without s2_id
+5. **Existence check** — `not_found: true` only if paper has NO doi AND title not matched in any search source. Papers found by at least one subagent → `not_found: false`.
+6. Sort by year descending, then first_author
+7. Assign sequential idx starting from 1
 
 **Output** — structured paper list:
 ```
@@ -220,7 +296,7 @@ Read and execute `agents/bibliography_agent.md` as the Aggregation Agent.
   oa_url: string | null,
   s2_id: string | null,
   not_found: bool,
-  sources: ["s2", "websearch1", ...]  # which subagents found this paper
+  sources: ["openalex1", "crossref", "websearch2", ...]
 }
 ```
 
