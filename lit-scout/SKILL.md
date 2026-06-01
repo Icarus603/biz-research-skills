@@ -8,11 +8,11 @@ description: Rapid literature digest for research topic selection. Reads a folde
 Parallel literature digest for rapid topic scouting.
 
 ```
-refs/*.pdf
-  → Phase 1: N subagents (parallel, one per PDF)
+refs/*.pdf  (named: {Author}_{Year}_{Title}.pdf)
+  -> Phase 1: N subagents (parallel, one per PDF)
               each reads abstract + intro + conclusion
-              each writes {idx}_{name}.md using templates/paper_note.md
-  → Phase 2: main thread reads all .md files
+              each writes {author}_{year}.md using templates/paper_note.md
+  -> Phase 2: main thread reads all .md files
               writes digest.md (synthesis only — gaps, themes, ideas)
 ```
 
@@ -38,10 +38,11 @@ Each subagent:
 1. Reads `templates/paper_note.md` (next to this SKILL.md)
 2. Reads the PDF — focus on abstract, introduction (first 3-4 pages), conclusion (last 2 pages) only
 3. Fills in every field of the template. If a field cannot be determined: write `不明确`
-4. Writes the completed note to `{folder}/notes/{idx:03d}_{pdf_basename}.md` (create `notes/` if not exists)
+4. Writes the completed note to `{folder}/notes/{first_author}_{year}.md` (create `notes/` if not exists)
 5. If PDF is unreadable (corrupted/scanned/password): writes a minimal note with `**[无法读取]**` and skips all fields
 
 Metadata from `manifest.csv` (if available) pre-fills title/author/year/venue — subagent should use it.
+PDF filenames are meaningful: `{FirstAuthor}_{Year}_{Title}.pdf` — no need for index numbers.
 
 The focus question (if given) informs which aspects to emphasize in "故事逻辑" and "未回答的问题".
 
@@ -64,16 +65,16 @@ Write `{folder}/notes/digest.md`:
 
 ## 快速索引
 
-| # | 作者(年) | 期刊 | Y | X | 方法 |
-|---|---------|------|---|---|------|
-| 001 | ... | ... | ... | ... | ... |
+| 作者(年) | 期刊 | Y | X | 方法 |
+|---------|------|---|---|------|
+| Author (Year) | ... | ... | ... | ... |
 ...
 
 ---
 
 ## 主题聚类
 
-{将这批文献按研究主题分组，3-5个主题，每个主题列相关论文编号和一句话说明共同点}
+{将这批文献按研究主题分组，3-5个主题，每个主题列相关论文（作者+年份）和一句话说明共同点}
 
 ---
 
@@ -88,7 +89,7 @@ Write `{folder}/notes/digest.md`:
 {3-5个具体空白，每条：
 - **空白**: 什么问题没人回答？
 - **为什么没人做**: 数据难、识别难、还是太新？
-- **相关文献**: [编号]}
+- **相关文献**: Author (Year)}
 
 ---
 
@@ -98,7 +99,7 @@ Write `{folder}/notes/digest.md`:
 - **研究问题**: 一句话
 - **Y / X / 识别策略**
 - **Novelty**: 比已有文献多贡献了什么
-- **参考基础**: [编号]}
+- **参考基础**: Author (Year)}
 ```
 
 ---
@@ -107,13 +108,13 @@ Write `{folder}/notes/digest.md`:
 
 ```
 {project}/refs/
-├── 001.pdf
-├── 002.pdf
+├── Hegde_2023_Patent_Publication_and_Innovation.pdf
+├── Babina_2023_Cutting_the_Innovation_Engine.pdf
 ├── ...
 ├── manifest.csv
 └── notes/
-    ├── 001_paper_a.md
-    ├── 002_paper_b.md
+    ├── Hegde_2023.md
+    ├── Babina_2023.md
     ├── ...
     └── digest.md       (synthesis — main output for user)
 ```

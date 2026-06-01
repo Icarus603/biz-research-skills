@@ -54,9 +54,9 @@ Rules:
 - Section V (批判性评估): be honest. If identification is weak, say so. Don't just echo authors' self-assessment.
 - Keep technical terms in English, explanations in Chinese.
 
-Save to: `{same folder as PDF}/notes/deep_{pdf_basename}.md`
+Save to: `{same folder as PDF}/notes/deep_{first_author}_{year}.md`
 
-If a `lit-scout` note already exists for this paper (`notes/{idx}_{pdf_basename}.md`), append a line at the top: `**深度笔记**: [deep_{pdf_basename}.md]` to cross-link.
+If a `lit-scout` note already exists for this paper (`notes/{first_author}_{year}.md`), append a line at the top: `**深度笔记**: [deep_{first_author}_{year}.md]` to cross-link.
 
 ---
 
