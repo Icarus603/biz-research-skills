@@ -1,25 +1,72 @@
-# Research Skill Set
+# Biz Research Skills for Claude Code
 
-A suite of Claude Code skills for academic research in business and social science fields. Covers the full workflow from project setup through topic selection, literature management, and presentation.
+[![Version](https://img.shields.io/badge/version-v1.0.0-blue)](https://github.com/Icarus603/biz-research-skills/releases/tag/v1.0.0)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-## Workflow
+A suite of Claude Code skills for academic research in business and social science — economics, finance, accounting, management, marketing. Covers the full workflow from project setup to literature review to topic selection to presentation.
+
+**Install in 30 seconds** (Claude Code CLI / VS Code / JetBrains):
+
+```text
+/plugin marketplace add Icarus603/biz-research-skills
+/plugin install biz-research-skills
+```
+
+Then say "帮我新建一个研究项目" or "find papers on AI and labor markets" and the right skill triggers automatically.
+
+---
+
+## What this does
+
+Eight skills that work together as a single research workflow:
 
 ```
-biz-research-scaffold          — set up project
+biz-research-scaffold          →  set up project repo (cross-platform)
        ↓
-ebsco-literature-pipeline      — discover & download papers → refs/
+ebsco-literature-pipeline      →  discover papers via S2 + OpenAlex + Crossref + WebSearch
+                                   download PDFs via CUFE WebVPN (EBSCO) + open access
        ↓
-lit-scout                      — parallel digest of all PDFs → refs/notes/
+lit-scout                      →  parallel digest: one subagent per PDF → notes + synthesis
        ↓
-deep-read                      — deep read selected papers → refs/notes/deep_*.md
+deep-read                      →  full paper reading + idea seeds + dialogue mode
        ↓
-paper-note                     — typeset reading note as PDF → refs/notes/{slug}_note/
+paper-note                     →  typeset reading note as LaTeX PDF (for supervisor)
        ↓
-data-feasibility               — assess data availability → data/README.md
+data-feasibility               →  assess data availability: China DBs + scraping options
        ↓
-topic-scout                    — Socratic topic selection → refs/notes/topic_proposal.md
+topic-scout                    →  Socratic topic selection → topic_proposal.md
        ↓
-minimal-beamer                 — build presentation slides → output/figures/
+minimal-beamer                 →  LaTeX Beamer slides (reads project context automatically)
+```
+
+---
+
+## Quick install
+
+**Prerequisites**
+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code/setup) (latest)
+- `ANTHROPIC_API_KEY` set
+- *For `ebsco-literature-pipeline`*: Chrome DevTools MCP running + CUFE WebVPN access
+- *For `paper-note` and `minimal-beamer`*: LaTeX installation
+  - macOS: `brew install --cask mactex` or `basictex`
+  - Linux: `sudo apt install texlive-full latexmk`
+
+**Plugin install (recommended):**
+
+```text
+/plugin marketplace add Icarus603/biz-research-skills
+/plugin install biz-research-skills
+```
+
+**Manual install (symlink):**
+
+```bash
+git clone git@github.com:Icarus603/biz-research-skills.git ~/code/dev/biz-research-skills
+cd ~/.claude/skills
+for skill in biz-research-scaffold data-feasibility deep-read ebsco-literature-pipeline lit-scout minimal-beamer paper-note topic-scout; do
+  ln -s ~/code/dev/biz-research-skills/$skill $skill
+done
 ```
 
 ---
@@ -27,20 +74,15 @@ minimal-beamer                 — build presentation slides → output/figures/
 ## Skills
 
 ### `biz-research-scaffold`
-Scaffold a research repository for economics, finance, management, or any business/social science field.
+Creates a standardized research project directory. Detects your OS (bash / PowerShell) and installed tools (Stata, R, Python, git). Asks only what it doesn't know.
 
-- Detects OS (bash / pwsh) and installed tools (Stata, R, Python, git)
-- Asks only what is unclear via `AskUserQuestion`
-- Runs a deterministic shell script — no LLM-generated file operations
-
-**Output directory structure:**
 ```
-{project}/
+project/
 ├── data/raw/  processed/  README.md
-├── code/  README.md
+├── code/
 ├── output/tables/  figures/  logs/
-├── refs/  notes/
-├── paper/  README.md
+├── refs/  notes/          ← where all the skills below write their output
+├── paper/
 ├── .gitignore
 └── README.md
 ```
@@ -48,88 +90,76 @@ Scaffold a research repository for economics, finance, management, or any busine
 ---
 
 ### `ebsco-literature-pipeline`
-Systematic literature discovery and bulk PDF download.
+End-to-end literature discovery and bulk PDF download.
 
-- **Discovery**: Semantic Scholar + OpenAlex + Crossref + WebSearch via `bibliography_agent`
-- **Download**: published OA versions via `curl`; EBSCO/CUFE-VPN for the rest
-- **Journal scope**: All / Economics Top-5 / UTD24 / FT50 (see `references/journal_lists.md`)
+- **Discovery**: Semantic Scholar + OpenAlex + Crossref APIs + WebSearch (via bundled `bibliography_agent`)
+- **Download**: published OA versions via `curl`; EBSCO via CUFE WebVPN for the rest
+- **Journal scope filters**: All journals / Economics Top-5 / UTD24 / FT50
 - **Output**: `refs/*.pdf` + `refs/manifest.csv` + `refs/not_found.txt`
+
+> Requires Chrome DevTools MCP and CUFE WebVPN access.
 
 ---
 
 ### `lit-scout`
-Rapid parallel literature digest for topic scouting.
+Reads all PDFs in `refs/` in parallel — one subagent per paper. Each subagent writes a structured Chinese-language note. The main thread synthesizes themes, gaps, and topic suggestions.
 
-- Spawns one subagent per PDF (all in parallel)
-- Each subagent writes a structured note using `templates/paper_note.md`
-- Main thread synthesizes: theme clusters, shared limitations, research gaps, topic suggestions
-
-**Output**: `refs/notes/{idx}_{paper}.md` + `refs/notes/digest.md`
+- Reads: abstract + intro + conclusion only (fast)
+- Each note follows `templates/paper_note.md`
+- **Output**: `refs/notes/{idx}_{paper}.md` per paper + `refs/notes/digest.md`
 
 ---
 
 ### `deep-read`
-Full-depth reading of a single paper.
+Full read of a single paper — every section, every table, every appendix. Classifies paper type (causal empirical / structural / theory / descriptive) and fills accordingly.
 
-- Reads entire PDF (abstract → appendix)
-- Classifies paper type (causal empirical / descriptive / structural / theory)
-- Fills structured `templates/deep_note.md` with 7 sections including Idea Seeds
-- Enters interactive dialogue mode after writing the note
-
-**Output**: `refs/notes/deep_{paper}.md`
+- Generates 3+ concrete **Idea Seeds** (RQ, Y, X, identification sketch, data requirement)
+- Enters **interactive dialogue mode** after writing the note — ask anything about the paper
+- **Output**: `refs/notes/deep_{paper}.md`
 
 ---
 
 ### `paper-note`
-Typeset a reading note as a clean LaTeX PDF for sharing with supervisors.
+Compiles a `deep_*.md` reading note into a clean, minimal LaTeX PDF for sharing with supervisors.
 
-- Takes `deep_*.md` as input
-- Uses minimal academic LaTeX template (`assets/template/main.tex`)
-- Compiles with `scripts/build.sh`, previews with `scripts/preview.sh`
-
-**Output**: `refs/notes/{slug}_note/build/main.pdf`
+- Template: A4, `lmodern`, `booktabs` tables, section rules, header with paper title/author
+- Compiles with `scripts/build.sh`, previews page-by-page before delivering
+- **Output**: `refs/notes/{slug}_note/build/main.pdf`
 
 ---
 
 ### `data-feasibility`
-Assess data availability and acquisition strategy for a research idea.
+Assesses data availability for a research idea. Covers Chinese commercial databases (CSMAR, WIND, CNRDS, CFPS, CHFS...), international databases, and public scraping sources.
 
-- Matches variables to Chinese and international databases (`references/china_databases.md`)
-- Evaluates scraping feasibility with legal risk ratings
-- Suggests alternative variable construction (text, satellite, network)
-- Produces structured feasibility verdict with acquisition roadmap
-
-**Output**: `data/README.md`; summary appended to `refs/notes/digest.md`
+- Matches each variable (Y, X, IV, controls) to available sources
+- Evaluates scraping feasibility with legal risk ratings (Low / Medium / High)
+- Suggests alternative construction (NLP, satellite, network data)
+- **Output**: structured report → `data/README.md`
 
 ---
 
 ### `topic-scout`
-Socratic research topic selection dialogue.
+Socratic dialogue for choosing between candidate research ideas. Covers novelty, identification credibility, data feasibility, scope/risk, and journal fit. One question per turn.
 
-- Loads context from `digest.md`, `deep_*.md`, `data/README.md` automatically
-- Covers: novelty, identification credibility, data feasibility, scope/risk, journal fit
-- One focused question per turn — never dumps all dimensions at once
-- **Produces no written output until user explicitly confirms their choice**
-
-**Output**: `refs/notes/topic_proposal.md`
+- Automatically loads `digest.md`, `deep_*.md`, `data/README.md` as context
+- **Never writes output until you explicitly say you've decided**
+- **Output**: `refs/notes/topic_proposal.md`
 
 ---
 
 ### `minimal-beamer`
-Build a LaTeX Beamer presentation from a bundled minimal template.
+Builds a LaTeX Beamer presentation from a bundled minimal template. Detects project context — reads `topic_proposal.md` and `deep_*.md` automatically to pre-fill content.
 
-- Detects project context: reads `topic_proposal.md`, `digest.md`, `deep_*.md` if present
 - Multi-round `AskUserQuestion` clarification before writing any frame
-- Mandatory visual review after every build (`scripts/preview.sh`)
-
-**Output**: `output/figures/slides_{name}.pdf` (inside project) or current directory
+- Mandatory visual review after every build
+- **Output**: `output/figures/slides_{name}.pdf`
 
 ---
 
-## Project Directory ↔ Skill Output Map
+## Project directory ↔ skill output
 
-| Directory | Written by |
-|-----------|-----------|
+| Path | Written by |
+|------|-----------|
 | `refs/*.pdf` | `ebsco-literature-pipeline` |
 | `refs/manifest.csv` | `ebsco-literature-pipeline` |
 | `refs/not_found.txt` | `ebsco-literature-pipeline` |
@@ -138,17 +168,39 @@ Build a LaTeX Beamer presentation from a bundled minimal template.
 | `refs/notes/deep_*.md` | `deep-read` |
 | `refs/notes/{slug}_note/` | `paper-note` |
 | `refs/notes/topic_proposal.md` | `topic-scout` |
-| `data/README.md` | `data-feasibility` (+ scaffold stub) |
+| `data/README.md` | `data-feasibility` |
 | `output/figures/slides_*.pdf` | `minimal-beamer` |
-| `paper/` | (user's own writing) |
 
 ---
 
-## Prerequisites
+## Workflow example
 
-| Skill | Requires |
-|-------|---------|
-| `ebsco-literature-pipeline` | Chrome DevTools MCP + CUFE WebVPN |
-| `paper-note`, `minimal-beamer` | LaTeX (MacTeX / TeX Live) |
-| `biz-research-scaffold` | bash (macOS/Linux) or pwsh (Windows) |
-| All others | Claude Code only |
+```
+# 1. Set up project
+"帮我新建一个关于 AI 对劳动力市场影响的研究项目"
+→ biz-research-scaffold creates ~/research/ai_labor_market/
+
+# 2. Find and download papers
+"找一下 AER/QJE/JPE 里关于 AI 和劳动力市场的文献"
+→ ebsco-literature-pipeline: discovers 40 papers, downloads PDFs to refs/
+
+# 3. Quick digest
+"帮我快速读一遍这批文献"
+→ lit-scout: 40 subagents in parallel → 40 notes + digest.md with 5 idea seeds
+
+# 4. Deep read a paper
+"精读一下 Acemoglu 2022 那篇"
+→ deep-read: full read → deep_acemoglu_2022.md + dialogue mode
+
+# 5. Check data availability
+"这个 idea 的数据怎么找？"
+→ data-feasibility: CSMAR + CNRDS patent data → feasibility report
+
+# 6. Choose a topic
+"帮我想想选哪个选题"
+→ topic-scout: Socratic dialogue → topic_proposal.md
+
+# 7. Make slides
+"做一个汇报用的 slides"
+→ minimal-beamer: reads topic_proposal.md → LaTeX Beamer PDF
+```
