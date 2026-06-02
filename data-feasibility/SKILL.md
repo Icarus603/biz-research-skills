@@ -139,6 +139,6 @@ Output a structured assessment:
 ## Phase 6: Save to Project
 
 If a project exists (from `biz-research-scaffold`):
-Write report to `{project}/data/README.md` — this is the data README stub that scaffold created.
-
-Also append a one-line summary to `{project}/refs/notes/digest.md` if it exists.
+- **Check `{project}/data/README.md` first.** If it has existing content (not just scaffold stub), preserve it — append the new feasibility report under a `## Data Feasibility ({date})` header. Never overwrite existing data documentation.
+- If `data/README.md` is still just the scaffold stub (empty or template), replace it with the full report.
+- Append a one-line summary (date + verdict + critical bottleneck) to `{project}/refs/{slug}/notes/digest.md` if it exists. If no project slug, use `{project}/refs/notes/digest.md`.

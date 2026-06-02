@@ -8,23 +8,29 @@ description: Rapid literature digest for research topic selection. Reads a folde
 Parallel literature digest for rapid topic scouting.
 
 ```
-refs/*.pdf  (named: {Author}_{Year}_{Title}.pdf)
+{project}/refs/{slug}/pdfs/*.pdf  (named: {FirstAuthor}_{Year}_{Title}.pdf)
   -> Phase 1: N subagents (parallel, one per PDF)
               each reads abstract + intro + conclusion
-              each writes {author}_{year}.md using templates/paper_note.md
+              each writes notes/{first_author}_{year}.md using templates/paper_note.md
   -> Phase 2: main thread reads all .md files
-              writes digest.md (synthesis only — gaps, themes, ideas)
+              writes digest.md (synthesis — gaps, themes, ideas)
 ```
+
+## PDF Location Convention
+
+**Lit-scout reads PDFs from `refs/{project-slug}/pdfs/`** — matching ebsco-literature-pipeline's output. If that directory doesn't exist, fall back to `refs/` root.
+
+Notes are always written to `{pdf_dir}/../notes/` — i.e., `refs/{project-slug}/notes/`, alongside `pdfs/`. This keeps all per-project artifacts under one slug directory.
 
 ---
 
 ## Phase 0: Setup
 
 Ask user (combine into one message if multiple unknowns):
-- **PDF folder** — default: `refs/` in current working directory
+- **PDF folder** — check `refs/{project-slug}/pdfs/` first (ebsco convention), fallback `refs/`
 - **Focus question** (optional) — specific angle, e.g. "AI and labor market". Leave blank = extract everything.
 
-Load `manifest.csv` if present in the folder — use for author/year/venue without reading PDFs.
+Load `manifest.csv` from `refs/{project-slug}/` (or `refs/` if no slug) — use for author/year/venue without reading PDFs.
 
 List all `*.pdf` files. Report count. If > 30, warn: "Found N papers — will spawn N subagents in parallel. Continue?"
 
@@ -52,7 +58,9 @@ The focus question (if given) informs which aspects to emphasize in "故事逻�
 
 After ALL subagents complete, main thread reads every `*.md` note file from `{folder}/notes/`.
 
-Write `{folder}/notes/digest.md`:
+**Before writing**: Check if `{project}/refs/{slug}/notes/digest.md` already exists (from prior data-feasibility or lit-scout runs). If it exists, read it and preserve the existing sections. Lit-scout's synthesis is appended at the bottom under a dated header: `## Lit-scout 更新 ({date})`. Never delete existing content.
+
+Write (or append to) `{project}/refs/{slug}/notes/digest.md`:
 
 ```markdown
 # Literature Digest
@@ -107,16 +115,19 @@ Write `{folder}/notes/digest.md`:
 ## File Structure After Completion
 
 ```
-{project}/refs/
-├── Hegde_2023_Patent_Publication_and_Innovation.pdf
-├── Babina_2023_Cutting_the_Innovation_Engine.pdf
-├── ...
-├── manifest.csv
-└── notes/
+refs/{project-slug}/
+├── papers.json                  (from ebsco search)
+├── manifest.csv                 (from ebsco search)
+├── pdfs/                        (from ebsco download)
+│   ├── Hegde_2023_Patent_Publication_and_Innovation.pdf
+│   ├── Babina_2023_Cutting_the_Innovation_Engine.pdf
+│   └── downloaded.json
+├── search/                      (raw search results)
+├── supplement/                  (supplementary queries)
+└── notes/                       (lit-scout output)
     ├── Hegde_2023.md
     ├── Babina_2023.md
-    ├── ...
-    └── digest.md       (synthesis — main output for user)
+    └── digest.md                (synthesis — main output for user)
 ```
 
 

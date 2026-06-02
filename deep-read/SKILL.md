@@ -11,8 +11,8 @@ Full-depth reading of a single academic paper. Output: structured deep note + id
 
 Accept any of:
 - PDF file path
-- A note file from `lit-scout` (e.g. `refs/notes/001_paper.md`) — use as starting context, still read the PDF for full depth
-- Just a paper title/DOI — locate the PDF in `refs/` first
+- A note file from `lit-scout` (e.g. `refs/{slug}/notes/Hegde_2023.md`) — use as starting context, still read the PDF for full depth
+- Just a paper title/DOI — check `refs/{project-slug}/pdfs/` first (ebsco convention), then `refs/`
 
 Ask user (if not already clear):
 - **Focus question**: "Is there a specific angle you want to explore? e.g. 'Can this be replicated with Chinese data?' or 'What are the weaknesses in the identification?' Leave blank for full coverage."

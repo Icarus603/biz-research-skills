@@ -17,8 +17,8 @@ Socratic dialogue for research topic selection. Multi-round discussion only. No 
 
 Before the first question, check if any of the following exist in the current project:
 
-- `refs/notes/digest.md` — lit-scout idea seeds
-- `refs/notes/deep_*.md` — deep-read idea seeds
+- `refs/{slug}/notes/digest.md` — lit-scout idea seeds (check `refs/notes/digest.md` as fallback)
+- `refs/{slug}/notes/deep_*.md` — deep-read idea seeds
 - `data/README.md` — data feasibility report
 
 If found, read them silently. Use as background for the discussion. Tell the user: "I can see [N idea seeds / data feasibility notes] from your previous work. Want to start from those, or describe your ideas fresh?"
@@ -122,4 +122,4 @@ When user explicitly confirms their choice, write:
 3. {third step}
 ```
 
-Save to `{project}/refs/notes/topic_proposal.md` if project exists, else current directory.
+Save to `{project}/refs/{slug}/notes/topic_proposal.md` if project exists. If `topic_proposal.md` already exists (from a previous topic-scout run), rename the old one to `topic_proposal_{YYYY-MM-DD}.md` before writing the new one — never overwrite previous proposals. If no project slug, save to current directory with the same archive logic.

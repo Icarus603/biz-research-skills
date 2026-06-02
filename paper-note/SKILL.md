@@ -36,12 +36,15 @@ Skip if both are clear from context.
 
 ## Step 2: Set Up Working Directory
 
+**Check first**: if `{project}/refs/{slug}/notes/{paper_slug}_note.pdf` already exists, warn user and ask whether to overwrite or keep existing.
+
 ```bash
-NOTE_DIR="{project_refs}/notes/{paper_slug}_note"
+NOTE_DIR="{project}/refs/{slug}/notes/{paper_slug}_note"
 cp -r ${CLAUDE_PLUGIN_ROOT}/assets/template/ "$NOTE_DIR/"
 ```
 
 `paper_slug` = sanitized paper title (lowercase, underscores, no spaces).
+`{slug}` = project slug from ebsco convention (e.g. `patents-top5`). If no slug, use `refs/notes/` directly.
 
 ## Step 3: Populate main.tex
 
@@ -101,13 +104,19 @@ Fix issues, recompile.
 
 Tell user:
 - PDF path: `$NOTE_DIR/build/main.pdf`
-- Also copy to `{project_refs}/notes/{paper_slug}_note.pdf` for easy access
+- Also copy to `{project}/refs/{slug}/notes/{paper_slug}_note.pdf` for easy access
+
+**Clean up build artifacts after user confirms**:
+```bash
+rm -rf "$NOTE_DIR"  # removes .tex, build/ logs, template files
+```
+Only the final `{paper_slug}_note.pdf` remains in `notes/`.
 
 Then ask (AskUserQuestion):
 - "Looks good, done"
 - "Need edits — specify"
 
-On edits: read the `.tex`, fix, recompile, preview, return to Step 6.
+On edits: re-create `$NOTE_DIR` from template, fix .tex, recompile, preview, return to Step 6. Clean up again when done.
 
 ## Files
 
