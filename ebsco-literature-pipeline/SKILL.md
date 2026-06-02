@@ -17,9 +17,21 @@ Topic
 
 ## Prerequisites
 
-- Chrome running with `--remote-debugging-port=9222`
 - CUFE WebVPN credentials in `~/.cufe_credentials` (one-time setup)
 - EBSCO session cookies auto-persisted at `~/.cache/ebsco-pipeline/session_cookies.json`
+
+### Chrome: fully automatic — DO NOT TOUCH
+
+`ensure_chrome()` in `ebsco_pipeline.py` handles everything:
+
+| Detail | Value |
+|--------|-------|
+| Mode | `--headless=new` (invisible, no GUI window) |
+| Profile | `~/.cache/ebsco-pipeline/chrome-profile` (isolated from user's normal Chrome) |
+| Port check | Only kills processes on port 9222, never touches user's Chrome |
+| Startup | Automatic on first `search` or `download` command |
+
+**CRITICAL for agents: NEVER manually start Chrome, kill Chrome, or run `killall "Google Chrome"`. The pipeline manages its own headless Chrome instance with a dedicated profile. It does not conflict with the user's normal Chrome in any way. Manual intervention is the ONLY thing that can break the user's existing session.**
 
 ### One-time setup
 
@@ -31,8 +43,6 @@ CUFE_PASSWORD=你的密码
 EOF
 chmod 600 ~/.cufe_credentials
 ```
-
-Chrome is auto-started by the pipeline on first run. No manual setup needed.
 
 ---
 
@@ -193,6 +203,7 @@ Complete API reference for EBSCO Search API accessed via CUFE WebVPN proxy.
 
 | Approach | Why It Fails |
 |----------|-------------|
+| **Manually killing or starting Chrome** | `ensure_chrome()` uses `--headless=new` + dedicated profile. Manual `killall`/`pkill` destroys user's normal Chrome session. Pipe already handles everything. |
 | Keyword search for empirical-measure topics | Papers use "innovation" not "patent" in titles |
 | `curl` standalone EBSCO API calls | VPN requires SSO-bound TLS session |
 | Title-only queries on EBSCO | Low recall vs. domain search with SO+DT filters |
