@@ -87,4 +87,5 @@ After script completes:
 
 - If chosen tool not detected: "Warning: {tool} not found. Install before running analysis."
 - Always: "To download papers into this project, use `ebsco-literature-pipeline` with target dir: `{full_path}/refs/`"
+- Always: "PDFs under `refs/*/pdfs/` are gitignored by default (large binaries). Metadata files (papers.json, manifest.csv, downloaded.json) are tracked."
 - If paper language is Chinese: "论文语言：中文。README 和初始文件使用英文标题（学术惯例），如需中文内容请自行编辑。"

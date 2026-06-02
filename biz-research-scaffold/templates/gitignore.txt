@@ -38,6 +38,18 @@ dist/
 # Regeneratable output
 output/logs/
 
+# Literature collection (refs/) — track metadata, exclude large PDFs
+# papers.json / manifest.csv / downloaded.json → tracked (small, machine-readable)
+# *.pdf → ignored (large binaries, often 200+ MB per project)
+refs/*/pdfs/*.pdf
+refs/*/pdfs/batch_*.json
+refs/*/.pipeline.lock
+!refs/*/papers.json
+!refs/*/manifest.csv
+!refs/*/pdfs/downloaded.json
+!refs/*/search/papers.json
+!refs/*/search/manifest.csv
+
 # OS
 .DS_Store
 Thumbs.db
