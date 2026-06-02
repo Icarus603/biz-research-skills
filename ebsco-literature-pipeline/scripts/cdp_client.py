@@ -159,6 +159,11 @@ class CDPClient:
         else:
             self.sock = sock
 
+        # Set socket recv timeout so _call() deadline loops actually work.
+        # Without this, sock.recv() blocks forever and _call() can never
+        # check its deadline — the download hangs silently.
+        self.sock.settimeout(3.0)
+
         # WebSocket upgrade handshake
         key = b64encode(os.urandom(16)).decode()
         req = (
@@ -196,25 +201,27 @@ class CDPClient:
             masked[i] = payload[i] ^ mask_key[i % 4]
         self.sock.sendall(bytes(header) + bytes(masked))
 
-    def _recv_frame(self) -> tuple[int, bytes]:
-        buf = self._recv_exact(2)
+    def _recv_frame(self, deadline: float | None = None) -> tuple[int, bytes]:
+        buf = self._recv_exact(2, deadline)
         opcode = buf[0] & 0x0F
         masked = (buf[1] & 0x80) != 0
         length = buf[1] & 0x7F
         if length == 126:
-            length = struct.unpack(">H", self._recv_exact(2))[0]
+            length = struct.unpack(">H", self._recv_exact(2, deadline))[0]
         elif length == 127:
-            length = struct.unpack(">Q", self._recv_exact(8))[0]
-        mask = self._recv_exact(4) if masked else b""
-        data = bytearray(self._recv_exact(length))
+            length = struct.unpack(">Q", self._recv_exact(8, deadline))[0]
+        mask = self._recv_exact(4, deadline) if masked else b""
+        data = bytearray(self._recv_exact(length, deadline))
         if masked:
             for i in range(length):
                 data[i] ^= mask[i % 4]
         return opcode, bytes(data)
 
-    def _recv_exact(self, n: int) -> bytes:
+    def _recv_exact(self, n: int, deadline: float | None = None) -> bytes:
         data = b""
         while len(data) < n:
+            if deadline is not None and time.time() > deadline:
+                raise TimeoutError("_recv_exact deadline")
             try:
                 chunk = self.sock.recv(n - len(data))
             except (socket.timeout, TimeoutError, BlockingIOError):
@@ -234,7 +241,7 @@ class CDPClient:
         buf = b""
         while time.time() < deadline:
             try:
-                opcode, data = self._recv_frame()
+                opcode, data = self._recv_frame(deadline)
             except (ConnectionError, TimeoutError, socket.timeout):
                 continue
             if opcode == self.OPCODE_TEXT:
