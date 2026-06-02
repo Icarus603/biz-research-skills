@@ -188,6 +188,8 @@ python3 scripts/ebsco_pipeline.py download \
 
 CDP WebSocket sessions degrade over time (connection drops, eval timeouts). The **`downloaded.json` sidecar enables safe multi-run batching** — each run skips already-downloaded papers via DOI dedup, so you never re-download.
 
+**Stall prevention**: each PDF fetch has a 30s `AbortController` timeout. If EBSCO's server hangs, the fetch aborts (vs. blocking the entire chunk forever). Combined with CDP-level chunk timeouts, stalls self-resolve — failed fetches go to the retry queue.
+
 | PDF count | Strategy |
 |-----------|----------|
 | ≤100 | Single run. `--chunk-size 15 --retry 2`. |

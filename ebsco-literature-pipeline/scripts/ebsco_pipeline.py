@@ -710,12 +710,16 @@ def _download_chunk_js(chunk_items: list) -> str:
     return """async () => {
     const items = """ + json.dumps(chunk_items) + """;
     const CONCURRENCY = 10;
+    const FETCH_TIMEOUT = 30000;  // per-PDF fetch timeout (ms) — prevents stalled chunks
     const results = [];
     for (let i = 0; i < items.length; i += CONCURRENCY) {
         const sub = items.slice(i, i + CONCURRENCY);
         const fetched = await Promise.all(sub.map(async (item) => {
             try {
-                const resp = await fetch(item.url);
+                const ctrl = new AbortController();
+                const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
+                const resp = await fetch(item.url, {signal: ctrl.signal});
+                clearTimeout(timer);
                 if (!resp.ok) return Object.assign({}, item, {error: 'HTTP '+resp.status});
                 const ct = resp.headers.get('content-type') || '';
                 if (!ct.includes('pdf')) return Object.assign({}, item, {error: 'not PDF: '+ct});
@@ -728,7 +732,8 @@ def _download_chunk_js(chunk_items: list) -> str:
                 });
                 return Object.assign({}, item, {ok: true, size: blob.size, data: dataUrl});
             } catch(e) {
-                return Object.assign({}, item, {error: e.message || String(e)});
+                const msg = e.name === 'AbortError' ? 'fetch timeout (' + (FETCH_TIMEOUT/1000) + 's)' : (e.message || String(e));
+                return Object.assign({}, item, {error: msg});
             }
         }));
         for (const f of fetched) {

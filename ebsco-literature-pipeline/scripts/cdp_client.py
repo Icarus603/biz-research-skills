@@ -89,16 +89,6 @@ class CDPClient:
         if err:
             raise RuntimeError(f"JS exception: {json.dumps(err, indent=2)[:500]}")
         return result.get("result", {}).get("result", {}).get("value")
-        # Wait for pending promise result
-        while time.time() < deadline:
-            msg = self._recv()
-            msg_id = msg.get("id")
-            result = msg.get("result", {}).get("result", {}).get("value")
-            if result is not None and isinstance(result, dict):
-                return result
-            if "exceptionDetails" in (msg.get("result", {}) or {}):
-                raise RuntimeError(str(msg)[:500])
-        raise TimeoutError("eval timed out")
 
     def ping(self, timeout_ms: int = 5000) -> bool:
         """Check if CDP connection is alive by sending a lightweight eval."""
