@@ -112,19 +112,27 @@ Full API reference: `references/ebsco_search_api.md`
 ```bash
 python3 scripts/ebsco_pipeline.py download \
   --manifest ./papers/papers.json \
-  --output ./papers/
+  --output ./papers/ \
+  --chunk-size 30
 ```
 
 ### What it does
 
 1. Reads `papers.json`, finds papers with `has_pdf: true` and valid `pdf_url`
-2. **Parallel download** via `Promise.all`:
-   - Fetches ALL PDFs concurrently
-   - Checks `Content-Type: application/pdf` (skips non-PDF responses)
-   - Creates blob URLs, triggers `<a download>` elements
-3. **Naming**: `{FirstAuthor}_{Year}_{Title_60chars}.pdf`
-4. **Output**: PDFs saved to `~/Downloads/` (Chrome default) with proper names
-5. Skips papers where EBSCO returns 400/403 (no institutional access)
+2. Skips already-downloaded papers (checks output dir)
+3. **Chunked parallel download** (default 30 PDFs per chunk):
+   - Each chunk: 10 concurrent fetches per sub-batch, then `<a download>` click
+   - Chunks run sequentially; within each chunk PDFs download in parallel
+   - 500ms pause between sub-batches so Chrome can flush downloads
+   - Each chunk has its own CDP eval timeout (scales with chunk size)
+4. **Post-chunk move**: After each chunk, files are moved from `~/Downloads/` to `--output` (Chrome ignores `downloadPath` for blob URLs, so `~/Downloads` is always used first)
+5. **Final sweep**: After all chunks, any remaining files in `~/Downloads` are moved
+6. **Naming**: `{FirstAuthor}_{Year}_{Title_60chars}.pdf`
+7. Skips papers where EBSCO returns 400/403 (no institutional access)
+
+### `--chunk-size`
+
+Controls PDFs per CDP eval call. Default 30. Lower to 15-20 if timeouts persist. Each chunk gets `max(120s, chunk_size * 5s)` timeout.
 
 ### Supported formats
 
@@ -182,7 +190,7 @@ Complete API reference for EBSCO Search API accessed via CUFE WebVPN proxy.
 | Title-only queries on EBSCO | Low recall vs. domain search with SO+DT filters |
 | `window.open` for PDF download | Popup blocker + no filename control |
 | iframe-based PDF download | Downloads HTML pages, not PDF content |
-| Sequential fetch downloads | ~30s per paper. Use parallel Promise.all |
+| Downloading 500+ PDFs in one chunk | Timeout. Use `--chunk-size 30` (default) |
 | `Browser.setDownloadBehavior` with blob URLs | Doesn't affect blob URL saves |
 
 ---
@@ -215,8 +223,8 @@ python3 scripts/ebsco_pipeline.py search "innovation OR patent OR R&D OR \"intel
   --journals "American Economic Review,Quarterly Journal of Economics,Journal of Political Economy,Econometrica,Review of Economic Studies" \
   --years 2022-2026 --max 500 --output ./papers/
 
-# 3. Download PDFs (parallel, named)
-python3 scripts/ebsco_pipeline.py download --manifest ./papers/papers.json
+# 3. Download PDFs (chunked parallel, 30 per chunk)
+python3 scripts/ebsco_pipeline.py download --manifest ./papers/papers.json --chunk-size 30
 
 # 4. Results
 ls ~/Downloads/*.pdf       # or --output dir after auto-move
@@ -226,8 +234,8 @@ python3 scripts/ebsco_pipeline.py search "innovation OR patent OR R&D OR \"intel
   --journals "American Economic Review,Quarterly Journal of Economics,Journal of Political Economy,Econometrica,Review of Economic Studies" \
   --years 2022-2026 --max 500 --output ./papers/
 
-# 3. Download PDFs (parallel, named)
-python3 scripts/ebsco_pipeline.py download --manifest ./papers/papers.json
+# 3. Download PDFs (chunked parallel, 30 per chunk)
+python3 scripts/ebsco_pipeline.py download --manifest ./papers/papers.json --chunk-size 30
 
 # 4. Results
 ls ~/Downloads/*.pdf       # Named PDFs

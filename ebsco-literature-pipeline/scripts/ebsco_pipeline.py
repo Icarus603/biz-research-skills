@@ -369,138 +369,178 @@ def search(cdp: CDPClient, query: str, journals: list[str], years: str,
 
 # ── PDF Download ────────────────────────────────────────────────
 
-def download_pdfs(cdp: CDPClient, manifest_path: str, output_dir: str = "."):
-    """Download PDFs for papers with pdf_url. Uses fetch+blob+download approach."""
+def _paper_filename(paper: dict) -> str:
+    """Build a safe filename for a paper: FirstAuthor_Year_Title.pdf"""
+    title_slug = "".join(c if c.isalnum() or c in " _-" else "" for c in (paper.get('title', '') or 'unknown')[:60]).strip().replace(" ", "_")[:60]
+    name = f"{paper.get('first_author','unknown')}_{paper.get('year','')}_{title_slug}"
+    return "".join(c if c.isalnum() or c in "_-" else "_" for c in name)[:120] + ".pdf"
+
+
+def _download_chunk_js(chunk_items: list) -> str:
+    """Build the JS for downloading one chunk of PDFs via fetch+blob+click."""
+    return """async () => {
+    const items = """ + json.dumps(chunk_items) + """;
+    const CONCURRENCY = 10;
+    const results = [];
+    // Fetch in sub-batches of CONCURRENCY to avoid overwhelming the connection
+    for (let i = 0; i < items.length; i += CONCURRENCY) {
+        const sub = items.slice(i, i + CONCURRENCY);
+        const fetched = await Promise.all(sub.map(async (item) => {
+            try {
+                const resp = await fetch(item.url);
+                if (!resp.ok) return Object.assign({}, item, {error: 'HTTP '+resp.status});
+                const ct = resp.headers.get('content-type') || '';
+                if (!ct.includes('pdf')) return Object.assign({}, item, {error: 'not PDF'});
+                const blob = await resp.blob();
+                const blobUrl = URL.createObjectURL(blob);
+                return Object.assign({}, item, {blobUrl, size: blob.size, ok: true});
+            } catch(e) {
+                return Object.assign({}, item, {error: e.message});
+            }
+        }));
+        // Trigger downloads for this sub-batch
+        for (const f of fetched) {
+            if (f.blobUrl) {
+                const a = document.createElement('a');
+                a.href = f.blobUrl;
+                a.download = f.name;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(function() { URL.revokeObjectURL(f.blobUrl); }, 10000);
+                results.push({idx: f.idx, ok: true, size: f.size, name: f.name});
+            } else {
+                results.push({idx: f.idx, ok: false, error: f.error, name: f.name});
+            }
+        }
+        // Brief pause between sub-batches so Chrome can flush downloads
+        await new Promise(function(r) { setTimeout(r, 500); });
+    }
+    return results;
+}"""
+
+
+def _move_from_downloads(names: list[str], target_dir: str) -> int:
+    """Move downloaded PDFs from ~/Downloads/ to target_dir. Returns count moved."""
+    dl_dir = os.path.expanduser("~/Downloads")
+    moved = 0
+    for name in names:
+        src = os.path.join(dl_dir, name)
+        dst = os.path.join(target_dir, name)
+        if os.path.exists(src) and not os.path.exists(dst):
+            os.rename(src, dst)
+            moved += 1
+    return moved
+
+
+def download_pdfs(cdp: CDPClient, manifest_path: str, output_dir: str = ".", chunk_size: int = 30):
+    """Download PDFs for papers with pdf_url.
+
+    Downloads in chunks of chunk_size. Each chunk is a separate CDP eval call
+    with its own timeout, so large batches don't time out. Files are moved from
+    ~/Downloads/ to output_dir after every chunk (Chrome ignores downloadPath
+    for blob URLs, so files always land in ~/Downloads/ first).
+    """
     json_path = manifest_path.replace(".csv", ".json") if manifest_path.endswith(".csv") else manifest_path
     with open(json_path) as f:
         papers = json.load(f)
 
     pdf_papers = [p for p in papers if p.get("pdf_url")]
-    print(f"[download] {len(pdf_papers)}/{len(papers)} papers have PDF links")
+    total = len(pdf_papers)
+    print(f"[download] {total}/{len(papers)} papers have PDF links")
 
-    os.makedirs(output_dir, exist_ok=True)
+    if total == 0:
+        print("[download] No PDFs to download.")
+        return 0
 
-    # Allow multiple downloads without prompting
     abs_output = os.path.abspath(output_dir)
+    os.makedirs(abs_output, exist_ok=True)
+
+    # Set download behavior (best-effort; blob URLs ignore downloadPath so we
+    # also move files from ~/Downloads as a fallback)
     cdp._call("Browser.setDownloadBehavior", {
         "behavior": "allowAndName",
         "downloadPath": abs_output,
         "eventsEnabled": True
     })
-    print(f"[download] Download dir: {abs_output}")
+    print(f"[download] Output dir: {abs_output}")
 
-    # PARALLEL download: Promise.all fetch -> trigger all <a download> at once
-    ok_count = 0
-    fail_count = 0
-    total = len(pdf_papers)
-
-    # Build items array for JS
-    items_for_js = []
-    for i, p in enumerate(pdf_papers):
-        title_slug = "".join(c if c.isalnum() or c in " _-" else "" for c in (p.get('title','') or 'unknown')[:60]).strip().replace(" ", "_")[:60]
-        name = f"{p.get('first_author','unknown')}_{p.get('year','')}_{title_slug}"
-        name = "".join(c if c.isalnum() or c in "_-" else "_" for c in name)[:120]
-        items_for_js.append({"url": p["pdf_url"], "name": name + ".pdf", "idx": i + 1})
-
-    js = json.dumps("""
-async () => {
-    const items = __ITEMS__;
-    // Phase 1: fetch ALL in parallel
-    const fetched = await Promise.all(items.map(async (item) => {
-        try {
-            const resp = await fetch(item.url);
-            if (!resp.ok) return {...item, error: 'HTTP '+resp.status};
-            const ct = resp.headers.get('content-type') || '';
-            if (!ct.includes('pdf')) return {...item, error: 'not PDF: '+ct.slice(0,50)};
-            const blob = await resp.blob();
-            const blobUrl = URL.createObjectURL(blob);
-            return {...item, blobUrl, size: blob.size, ok: true};
-        } catch(e) {
-            return {...item, error: e.message};
-        }
-    }));
-    // Phase 2: trigger all downloads
-    const results = [];
-    for (const f of fetched) {
-        if (f.blobUrl) {
-            const a = document.createElement('a');
-            a.href = f.blobUrl;
-            a.download = f.name;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(f.blobUrl), 10000);
-            results.push({idx: f.idx, ok: true, size: f.size, name: f.name});
-        } else {
-            results.push({idx: f.idx, ok: false, error: f.error, name: f.name});
-        }
-    }
-    return results;
-}
-""".replace("__ITEMS__", json.dumps(items_for_js)))
-
-    # Remove outer json.dumps wrapping to get clean JS string
-    js = js.replace('"async () => {', 'async () => {').replace('}"', '}').replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
-    # Actually let me just build it properly
-
-    js2 = """async () => {
-    const items = """ + json.dumps(items_for_js) + """;
-    const fetched = await Promise.all(items.map(async (item) => {
-        try {
-            const resp = await fetch(item.url);
-            if (!resp.ok) return Object.assign({}, item, {error: 'HTTP '+resp.status});
-            const ct = resp.headers.get('content-type') || '';
-            if (!ct.includes('pdf')) return Object.assign({}, item, {error: 'not PDF'});
-            const blob = await resp.blob();
-            const blobUrl = URL.createObjectURL(blob);
-            return Object.assign({}, item, {blobUrl, size: blob.size, ok: true});
-        } catch(e) {
-            return Object.assign({}, item, {error: e.message});
-        }
-    }));
-    const results = [];
-    for (const f of fetched) {
-        if (f.blobUrl) {
-            const a = document.createElement('a');
-            a.href = f.blobUrl;
-            a.download = f.name;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(function() { URL.revokeObjectURL(f.blobUrl); }, 10000);
-            results.push({idx: f.idx, ok: true, size: f.size, name: f.name});
-        } else {
-            results.push({idx: f.idx, ok: false, error: f.error, name: f.name});
-        }
-    }
-    return results;
-}"""
-
-    results = cdp.eval(js2, await_promise=True, timeout_ms=300000)
-
-    download_names = {}
-    for r in (results or []):
-        if r.get("ok"):
-            ok_count += 1
-            download_names[r['idx']] = r['name']
-            print(f"[download] {r['idx']}/{total}: {r['name']} ({r.get('size',0)//1024}KB)")
+    # Skip already-downloaded papers
+    existing = set(os.listdir(abs_output))
+    pending = []
+    skipped = 0
+    for p in pdf_papers:
+        fname = _paper_filename(p)
+        if fname in existing:
+            skipped += 1
         else:
-            fail_count += 1
-            print(f"[download] {r['idx']}/{total}: SKIP {r['name']} - {r.get('error','?')}")
+            pending.append(p)
 
-    # Move downloaded PDFs from ~/Downloads/ to output dir using exact JS filenames
-    if ok_count > 0:
-        dl_dir = os.path.expanduser("~/Downloads")
-        moved = 0
-        for name in download_names.values():
-            src = os.path.join(dl_dir, name)
-            if os.path.exists(src):
-                os.rename(src, os.path.join(abs_output, name))
-                moved += 1
-        if moved > 0:
-            print(f"[download] Moved {moved}/{ok_count} PDFs to {abs_output}/")
+    if skipped > 0:
+        print(f"[download] {skipped}/{total} already downloaded, {len(pending)} remaining")
 
-    return ok_count
+    if not pending:
+        print("[download] All PDFs already downloaded.")
+        return len(pdf_papers)
+
+    # Build chunk items for all pending papers
+    all_items = []
+    for i, p in enumerate(pending):
+        name = _paper_filename(p)
+        all_items.append({"url": p["pdf_url"], "name": name, "idx": i + 1})
+
+    # Process in chunks
+    chunks = [all_items[i:i + chunk_size] for i in range(0, len(all_items), chunk_size)]
+    total_ok = skipped  # count already-downloaded as OK
+    total_fail = 0
+    chunk_timeout_ms = max(120_000, chunk_size * 5_000)  # scale timeout with chunk size
+
+    for ci, chunk in enumerate(chunks):
+        chunk_start = ci * chunk_size + 1
+        chunk_end = chunk_start + len(chunk) - 1
+        print(f"[download] Chunk {ci+1}/{len(chunks)} (papers {chunk_start}-{chunk_end}, {len(chunk)} PDFs)...")
+
+        js = _download_chunk_js(chunk)
+        try:
+            results = cdp.eval(js, await_promise=True, timeout_ms=chunk_timeout_ms)
+        except Exception as e:
+            print(f"[download] Chunk {ci+1} eval failed: {e}")
+            # Try to move whatever made it to ~/Downloads
+            moved = _move_from_downloads([item["name"] for item in chunk], abs_output)
+            if moved > 0:
+                print(f"[download]   Recovered {moved} files from ~/Downloads")
+                total_ok += moved
+            total_fail += len(chunk) - moved
+            continue
+
+        chunk_ok = 0
+        chunk_fail = 0
+        ok_names = []
+        for r in (results or []):
+            if r.get("ok"):
+                chunk_ok += 1
+                ok_names.append(r["name"])
+                print(f"[download]   {r['idx']}/{len(all_items)}: {r['name']} ({r.get('size',0)//1024}KB)")
+            else:
+                chunk_fail += 1
+                print(f"[download]   {r['idx']}/{len(all_items)}: SKIP {r['name']} - {r.get('error','?')}")
+
+        # Move files from ~/Downloads immediately (don't wait for all chunks)
+        moved = _move_from_downloads(ok_names, abs_output)
+        if moved < chunk_ok:
+            print(f"[download]   Moved {moved}/{chunk_ok} to output (rest may still be saving, will retry at end)")
+
+        total_ok += chunk_ok
+        total_fail += chunk_fail
+
+    # Final sweep: move any remaining files from ~/Downloads
+    final_moved = _move_from_downloads([_paper_filename(p) for p in pdf_papers], abs_output)
+    if final_moved > 0:
+        print(f"[download] Final sweep: moved {final_moved} more files from ~/Downloads")
+
+    final_count = len([f for f in os.listdir(abs_output) if f.endswith('.pdf')])
+    print(f"[download] Done. {final_count} PDFs on disk ({total_fail} failed/403, {total_ok} OK)")
+    return total_ok
 
 
 # ── CLI ──────────────────────────────────────────────────────────
@@ -555,6 +595,7 @@ def main():
     dp = sub.add_parser("download")
     dp.add_argument("--manifest", required=True, help="Path to papers.json or manifest.csv")
     dp.add_argument("--output", "-o", default="./papers", help="Output directory for PDFs")
+    dp.add_argument("--chunk-size", type=int, default=30, help="PDFs per chunk (default 30, lower if timeout)")
 
     args = parser.parse_args()
 
@@ -579,7 +620,7 @@ def main():
 
         elif args.command == "download":
             setup_session(cdp)
-            download_pdfs(cdp, args.manifest, args.output)
+            download_pdfs(cdp, args.manifest, args.output, args.chunk_size)
 
     finally:
         cdp.close()
