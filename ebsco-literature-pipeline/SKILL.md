@@ -10,11 +10,21 @@ Systematic literature discovery + bulk PDF download via CUFE WebVPN + EBSCO.
 ```
 Topic
   -> Phase 0: STATUS CHECK (check existing refs/ content — NEVER skip this)
-  -> Phase 1: TOPIC ANALYSIS (classify -> domain mapping)
-  -> Phase 2: SEARCH (EBSCO API via CDP, parallel keyword + domain queries, auto-filter by journal)
+  -> Phase 1: TOPIC ANALYSIS (classify -> domain mapping -> decompose into subtopic waves)
+  -> Phase 2: SEARCH LOOP (fire wave after wave, --merge, until exhaustion gate met — NEVER one-and-done)
   -> Phase 3: DOWNLOAD (parallel fetch+base64 decode, DOI dedup, retry on transient errors)
   -> Phase 4: MANIFEST (manifest.csv + papers.json + downloaded.json sidecar)
+  -> Loop back to Phase 2 if download surfaced new angles or user says "more"
 ```
+
+## Prime Directive: EXHAUST, don't sample
+
+A literature request is a request to find **everything** that matches, not a sample.
+ONE search wave is NEVER enough for a broad/exhaustive ask ("所有 / 全部 / 多多益善 /
+all / as many as possible / comprehensive"). You MUST keep firing search waves across
+distinct sub-angles until the **exhaustion gate** (Phase 2) is provably met, THEN download,
+THEN report. Stopping after one wave and asking the user "want more?" is a FAILURE mode —
+the user already said more. Do the waves yourself.
 
 ## Output Convention (MANDATORY)
 
@@ -126,9 +136,28 @@ If user specifies a journal list, use EBSCO's `SO "Journal Name"` field code:
 
 Supported journal lists in `references/journal_lists.md`.
 
+### Decompose into subtopic waves (MANDATORY for broad asks)
+
+A broad topic = a UNION of narrower angles. One query can't capture all of them with both
+precision and recall. Before searching, write down a **wave plan**: 4-8 distinct queries,
+each anchored on the topic but targeting a different sub-angle the user named or implied.
+
+Example — user asks for "all patent-related empirical papers in Top-5, 2022-2026":
+
+| Wave | Angle | Query anchor (combine with --journals + --years + --merge) |
+|------|-------|------------------------------------------------------------|
+| 1 | Core patents | `DE "Patents" OR DE "Intellectual Property" OR TI patent OR AB patent OR TI inventor` |
+| 2 | Innovation/R&D domain | `DE "Technological innovations" OR DE "Patent applications" OR AB "patent citations" OR AB "patent data"` |
+| 3 | Litigation/transfer/licensing | `DE "Patent infringement" OR DE "Patent licenses" OR AB "patent litigation" OR AB "patent transfer" OR AB licensing` |
+| 4 | Spillovers/citations/text | `AB "knowledge spillover" OR AB "technology spillover" OR AB "patent citations" OR AB "patent text"` |
+| 5 | Trade/IP/tech-transfer | `DE "Technology transfer" OR DE "Trade secrets" OR AB "intellectual property rights" AND AB trade OR AB "forced technology transfer"` |
+
+Every sub-angle the user enumerates ("X, Y, Z 等") becomes at least one wave. Do not collapse
+them into a single query and call it done.
+
 ---
 
-## Phase 2: Search
+## Phase 2: Search Loop
 
 ### CLI
 
@@ -140,6 +169,45 @@ python3 scripts/ebsco_pipeline.py search "DE \"Patents\" OR DE \"Intellectual Pr
   --max 500 \
   --output ./refs/
 ```
+
+### The loop (run EVERY wave from your Phase 1 plan)
+
+Wave 1 writes the search output; waves 2+ use `--merge` to append with DOI dedup into the
+SAME `search/` dir. After each wave, read the printed `Merged: N new + M existing` line —
+that `N new` is your signal.
+
+```bash
+# Wave 1 (no --merge — creates the file)
+python3 scripts/ebsco_pipeline.py search "<wave-1 anchor>" \
+  --journals "..." --years 2022-2026 --max 500 \
+  --output ./refs/{slug}/search/
+
+# Waves 2..K (--merge — append + dedup). Run ALL planned waves.
+python3 scripts/ebsco_pipeline.py search "<wave-2 anchor>" \
+  --journals "..." --years 2022-2026 --max 500 --merge \
+  --output ./refs/{slug}/search/
+# ... wave 3, 4, 5 ...
+```
+
+### Exhaustion gate — the ONLY license to stop searching
+
+Keep firing waves until BOTH hold:
+1. **All planned sub-angle waves have run** (every angle the user named).
+2. **Diminishing returns confirmed**: 2 consecutive waves each added `< 2 new` papers
+   (read the `Merged: N new` line). If a wave adds ≥2, the space isn't exhausted —
+   invent another adjacent angle and keep going.
+
+Only then proceed to Phase 3. For a non-exhaustive ask (user wants "a few key papers on X"),
+1-2 waves is fine — match effort to the request. But for "all / 所有 / 多多益善 / 尽可能多",
+the gate above is mandatory. Narrow Top-5 corpora legitimately exhaust at low counts (e.g.
+~50 hits / ~22 PDFs for patents 2022-26) — that's a valid stop ONCE the gate is met, and you
+should SAY so explicitly rather than implying more exist.
+
+### After download, loop back if warranted
+
+If Phase 3 download surfaces a paper whose title/abstract reveals a NEW angle you didn't
+search (e.g. a "quid pro quo / standard-essential patents" paper appears), add a wave for it.
+The pipeline is a loop, not a line.
 
 ### What it does
 
@@ -306,6 +374,9 @@ Complete API reference for EBSCO Search API accessed via CUFE WebVPN proxy.
 | iframe-based PDF download | Downloads HTML pages, not PDF content |
 | Single download run for 200+ PDFs | CDP WebSocket session degrades over time — eval calls start timing out. Split into 2–4 runs via `downloaded.json` dedup (see Session Batching above). |
 | Blob URL + `<a download>` click | Chrome doesn't reliably save blob URL downloads to disk. Use base64 return instead. |
+| **Stopping after ONE search wave on a broad ask** | The user said "all / 多多益善". One query never covers a multi-angle topic. Run the full wave plan + exhaustion gate (Phase 2) before reporting. |
+| **Asking "want more?" instead of doing more** | If the user already requested exhaustive coverage, don't bounce the decision back — fire the next wave yourself. Ask only AFTER the exhaustion gate is met. |
+| Treating HTTP 400 as "search exhausted" | HTTP 400 = no full-text access for THAT paper (or recent embargo), not a corpus signal. Note it, keep searching other angles. Don't let download failures end the search loop. |
 
 ---
 
