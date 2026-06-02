@@ -88,34 +88,46 @@ project/
 ├── data/raw/  processed/  README.md
 ├── code/
 ├── output/tables/  figures/  logs/
-├── refs/  notes/          ← where all the skills below write their output
+├── refs/{slug}/           ← per-project literature dir (one slug per topic)
+│   ├── papers.json  manifest.csv
+│   ├── web/              ← raw web-search discovery results
+│   ├── supplement/       ← EBSCO supplementary search
+│   ├── pdfs/             ← downloaded PDFs + downloaded.json
+│   └── notes/            ← lit-scout / deep-read / paper-note / topic-scout output
 ├── paper/
 ├── .gitignore
 └── README.md
 ```
 
+> **Convention**: every literature skill writes under `refs/{project-slug}/` — a
+> kebab-case dir per topic (e.g. `refs/patents-top5/`). The scaffold creates an
+> empty `refs/`; skills create the slug subdirs on demand. Nothing writes to a flat
+> `refs/notes/` — notes live at `refs/{slug}/notes/`.
+
 ---
 
 ### `ebsco-literature-pipeline`
-Literature discovery and bulk PDF download via EBSCO Search API.
+Literature discovery via a parallel **web-search agent team**, then EBSCO (CUFE WebVPN) for record resolution + bulk PDF download.
 
-- **Discovery**: EBSCO API via Chrome CDP — SO/DT field-code queries, journal-scoped, paginated
+- **Discovery (primary)**: 5-7 parallel WebSearch agents across topic sub-angles — better recall/ranking than EBSCO
+- **Resolve**: maps each web-found paper (DOI/title) to its EBSCO record to obtain a downloadable `pdf_url`
 - **Auto-login**: reads `~/.cufe_credentials`, fills CUFE CAS SSO form, persists session cookies
-- **Download**: parallel `Promise.all` fetch + `<a download>` with semantic names (`{Author}_{Year}_{Title}.pdf`)
+- **Download (multi-epoch)**: parallel fetch + base64→disk, semantic names (`{Author}_{Year}_{Title}.pdf`), DOI-dedup sidecar; re-run until ALL PDFs land
+- **EBSCO search**: supplement only — one pass for stragglers
 - **Journal scope**: All journals / Economics Top-5 / UTD24 / FT50
-- **Output**: `refs/*.pdf` (named) + `refs/papers.json` + `refs/manifest.csv`
-- **CLI**: `python3 scripts/ebsco_pipeline.py search|download`
+- **Output**: `refs/{slug}/pdfs/*.pdf` (named) + `refs/{slug}/papers.json` + `refs/{slug}/manifest.csv`
+- **CLI**: `python3 scripts/ebsco_pipeline.py status|resolve|search|download`
 
-> Requires Chrome `--remote-debugging-port=9222` and CUFE credentials in `~/.cufe_credentials`.
+> Requires headless Chrome (auto-managed on port 9222) and CUFE credentials in `~/.cufe_credentials`.
 
 ---
 
 ### `lit-scout`
-Reads all PDFs in `refs/` in parallel — one subagent per paper. Each subagent writes a structured Chinese-language note. The main thread synthesizes themes, gaps, and topic suggestions.
+Reads all PDFs in `refs/{slug}/pdfs/` in parallel — one subagent per paper. Each subagent writes a structured Chinese-language note. The main thread synthesizes themes, gaps, and topic suggestions.
 
 - Reads: abstract + intro + conclusion only (fast)
 - Each note follows `templates/paper_note.md`
-- **Output**: `refs/notes/{first_author}_{year}.md` per paper + `refs/notes/digest.md`
+- **Output**: `refs/{slug}/notes/{first_author}_{year}.md` per paper + `refs/{slug}/notes/digest.md`
 
 ---
 
@@ -124,7 +136,7 @@ Full read of a single paper — every section, every table, every appendix. Clas
 
 - Generates 3+ concrete **Idea Seeds** (RQ, Y, X, identification sketch, data requirement)
 - Enters **interactive dialogue mode** after writing the note — ask anything about the paper
-- **Output**: `refs/notes/deep_{paper}.md`
+- **Output**: `refs/{slug}/notes/deep_{paper}.md`
 
 ---
 
@@ -133,7 +145,7 @@ Compiles a `deep_*.md` reading note into a clean, minimal LaTeX PDF for sharing 
 
 - Template: A4, `lmodern`, `booktabs` tables, section rules, header with paper title/author
 - Compiles with `scripts/build.sh`, previews page-by-page before delivering
-- **Output**: `refs/notes/{slug}_note/build/main.pdf`
+- **Output**: `refs/{slug}/notes/{paper_slug}_note/build/main.pdf`
 
 ---
 
@@ -152,7 +164,7 @@ Socratic dialogue for choosing between candidate research ideas. Covers novelty,
 
 - Automatically loads `digest.md`, `deep_*.md`, `data/README.md` as context
 - **Never writes output until you explicitly say you've decided**
-- **Output**: `refs/notes/topic_proposal.md`
+- **Output**: `refs/{slug}/notes/topic_proposal.md`
 
 ---
 
@@ -169,14 +181,15 @@ Builds a LaTeX Beamer presentation from a bundled minimal template. Detects proj
 
 | Path | Written by |
 |------|-----------|
-| `refs/*.pdf` | `ebsco-literature-pipeline` (named: `{Author}_{Year}_{Title}.pdf`) |
-| `refs/papers.json` | `ebsco-literature-pipeline` |
-| `refs/manifest.csv` | `ebsco-literature-pipeline` |
-| `refs/notes/{first_author}_{year}.md` | `lit-scout` |
-| `refs/notes/digest.md` | `lit-scout` |
-| `refs/notes/deep_*.md` | `deep-read` |
-| `refs/notes/{slug}_note/` | `paper-note` |
-| `refs/notes/topic_proposal.md` | `topic-scout` |
+| `refs/{slug}/web/papers.json` | `ebsco-literature-pipeline` (web-team discovery) |
+| `refs/{slug}/pdfs/*.pdf` | `ebsco-literature-pipeline` (named: `{Author}_{Year}_{Title}.pdf`) |
+| `refs/{slug}/papers.json` | `ebsco-literature-pipeline` (resolved canonical) |
+| `refs/{slug}/manifest.csv` | `ebsco-literature-pipeline` |
+| `refs/{slug}/notes/{first_author}_{year}.md` | `lit-scout` |
+| `refs/{slug}/notes/digest.md` | `lit-scout` |
+| `refs/{slug}/notes/deep_*.md` | `deep-read` |
+| `refs/{slug}/notes/{paper_slug}_note/` | `paper-note` |
+| `refs/{slug}/notes/topic_proposal.md` | `topic-scout` |
 | `data/README.md` | `data-feasibility` |
 | `output/figures/slides_*.pdf` | `minimal-beamer` |
 
@@ -191,7 +204,7 @@ Builds a LaTeX Beamer presentation from a bundled minimal template. Detects proj
 
 # 2. Find and download papers
 "找一下 AER/QJE/JPE 里关于 AI 和劳动力市场的文献"
-→ ebsco-literature-pipeline: discovers 40 papers, downloads PDFs to refs/
+→ ebsco-literature-pipeline: web team discovers 40 papers, resolves + downloads PDFs to refs/ai-labor-market/pdfs/
 
 # 3. Quick digest
 "帮我快速读一遍这批文献"

@@ -47,8 +47,13 @@ refs/*/.pipeline.lock
 !refs/*/papers.json
 !refs/*/manifest.csv
 !refs/*/pdfs/downloaded.json
+!refs/*/web/papers.json
+!refs/*/web/manifest.csv
 !refs/*/search/papers.json
 !refs/*/search/manifest.csv
+!refs/*/supplement/papers.json
+!refs/*/supplement/manifest.csv
+# notes/ (lit-scout, deep-read, etc.) tracked by default — markdown, small
 
 # OS
 .DS_Store

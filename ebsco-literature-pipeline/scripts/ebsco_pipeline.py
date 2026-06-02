@@ -688,6 +688,201 @@ def search(cdp: CDPClient, query: str, journals: list[str], years: str,
     return papers
 
 
+# ── Resolve: web-found papers → EBSCO records (attach pdf_url) ───
+
+def _norm_title(t: str) -> str:
+    """Normalize a title for fuzzy matching: lowercase, strip punctuation,
+    drop leading articles, collapse whitespace."""
+    import re as _re
+    import html as _html
+    t = _html.unescape(t or "")
+    t = t.lower()
+    t = _re.sub(r"[\.,:;!?()\[\]{}\"'“”‘’«»—–\-]", " ", t)
+    t = _re.sub(r"^(a|an|the)\s+", "", t)
+    t = _re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def _title_sim(a: str, b: str) -> float:
+    """Levenshtein ratio between two normalized titles. Pure stdlib."""
+    a = _norm_title(a)
+    b = _norm_title(b)
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+    # Levenshtein edit distance (iterative, O(len(a)*len(b)))
+    la, lb = len(a), len(b)
+    prev = list(range(lb + 1))
+    for i in range(1, la + 1):
+        cur = [i] + [0] * lb
+        ca = a[i - 1]
+        for j in range(1, lb + 1):
+            cost = 0 if ca == b[j - 1] else 1
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+        prev = cur
+    dist = prev[lb]
+    return 1.0 - dist / max(la, lb)
+
+
+def _build_resolve_js(doi: str, title: str) -> str:
+    """Build JS that queries EBSCO for ONE paper: DOI lookup first, then
+    title search. Returns up to 5 candidate records (id, doi, title, source,
+    has_pdf, pdf_url) for Python-side matching."""
+    # Prefer DOI-anchored query; fall back to title phrase.
+    if doi:
+        q = f'DI "{doi}"'
+    else:
+        # Strip quotes from title to keep query well-formed
+        safe = (title or "").replace('"', "")
+        q = f'TI "{safe}"'
+    js_template = '''async () => {
+    const BASE = 'https://research-ebsco-com-443.webvpn.cufe.edu.cn';
+    const API = BASE + '/api/search/v1/search?applyAllLimiters=true';
+    const QUERY = __QUERY__;
+    const resp = await fetch(API, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            query: QUERY, profileIdentifier: 'k3svp7', searchMode: 'all',
+            sort: 'relevance', offset: 0, count: 5, userDirectAction: true,
+            expanders: ['fullText', 'concept']
+        })
+    });
+    const data = await resp.json();
+    const items = data?.search?.items || [];
+    return items.map(item => {
+        const title = typeof item.title === 'string' ? item.title : (item.title?.value || '');
+        const hasPDF = item.links?.downloadLinks?.some(l => l.type === 'pdf') || false;
+        const pdfUrl = hasPDF
+            ? BASE + '/api/search/v1/record/' + item.id + '/fulltext/pdf?sourceRecordId=' + item.id + '&opid=k3svp7&intent=download'
+            : null;
+        return {
+            ebsco_id: item.id, doi: item.doi || null, title: title,
+            venue: item.source || '', has_pdf: hasPDF, pdf_url: pdfUrl,
+            year: parseInt((item.publicationDate || item.coverDate || '').slice(0,4)) || null
+        };
+    });
+}'''
+    return js_template.replace('__QUERY__', json.dumps(q))
+
+
+def resolve(cdp: CDPClient, manifest_path: str, output_path: str = None,
+            title_threshold: float = 0.85):
+    """Enrich a web-discovered papers.json with EBSCO record IDs + pdf_url.
+
+    For each paper: query EBSCO by DOI (exact), else by title (fuzzy match
+    ≥ title_threshold). On match, attach ebsco_id, pdf_url, has_pdf. Papers
+    with no EBSCO match keep their oa_url (web OA fallback) and get
+    ebsco_unmatched=true.
+
+    Writes enriched papers.json (in place unless output_path given) so the
+    download command can consume it.
+    """
+    json_path = manifest_path
+    if not os.path.exists(json_path):
+        alt = os.path.join(os.path.dirname(json_path), "papers.json")
+        if os.path.exists(alt):
+            json_path = alt
+    with open(json_path, encoding="utf-8") as f:
+        papers = json.load(f)
+
+    print(f"[resolve] {len(papers)} web-discovered papers to resolve against EBSCO")
+
+    matched = 0
+    matched_pdf = 0
+    unmatched = 0
+    for i, p in enumerate(papers, 1):
+        # Skip if already resolved (has EBSCO pdf_url from a prior run)
+        if p.get("pdf_url") and p.get("ebsco_id"):
+            matched += 1
+            matched_pdf += 1
+            continue
+
+        doi = (p.get("doi") or "").strip()
+        title = p.get("title") or ""
+        cand = []
+
+        # Pass 1: DOI lookup
+        if doi:
+            try:
+                cand = cdp.eval(_build_resolve_js(doi, ""), await_promise=True, timeout_ms=30000) or []
+            except Exception as e:
+                print(f"[resolve]   {i}/{len(papers)}: DOI query error: {e}")
+                cand = []
+
+        hit = None
+        # DOI candidates: accept first whose title clears a loose cross-check (0.70),
+        # guarding against a bad DOI resolving to an unrelated record.
+        for c in cand:
+            if c.get("doi") and doi and c["doi"].strip().lower() == doi.lower():
+                if not title or _title_sim(title, c.get("title", "")) >= 0.70:
+                    hit = c
+                    break
+        # Pass 2: title search fallback
+        if not hit and title:
+            try:
+                tcand = cdp.eval(_build_resolve_js("", title), await_promise=True, timeout_ms=30000) or []
+            except Exception as e:
+                print(f"[resolve]   {i}/{len(papers)}: title query error: {e}")
+                tcand = []
+            best = None
+            best_sim = 0.0
+            for c in tcand:
+                sim = _title_sim(title, c.get("title", ""))
+                if sim > best_sim:
+                    best_sim = sim
+                    best = c
+            if best and best_sim >= title_threshold:
+                hit = best
+
+        if hit:
+            p["ebsco_id"] = hit["ebsco_id"]
+            p["has_pdf"] = hit.get("has_pdf", False)
+            p["pdf_url"] = hit.get("pdf_url")
+            if not p.get("doi") and hit.get("doi"):
+                p["doi"] = hit["doi"]
+            if not p.get("venue") and hit.get("venue"):
+                p["venue"] = hit["venue"]
+            p["ebsco_unmatched"] = False
+            matched += 1
+            if p.get("pdf_url"):
+                matched_pdf += 1
+            tag = "PDF" if p.get("pdf_url") else "no-pdf"
+            print(f"[resolve]   {i}/{len(papers)}: MATCH {hit['ebsco_id']} ({tag}) — {title[:50]}")
+        else:
+            p["ebsco_unmatched"] = True
+            # Keep oa_url as fallback download source (handled by download cmd)
+            unmatched += 1
+            oa = "oa" if p.get("oa_url") else "none"
+            print(f"[resolve]   {i}/{len(papers)}: NO EBSCO MATCH (fallback={oa}) — {title[:50]}")
+        time.sleep(0.3)  # polite pacing
+
+    # Re-index
+    for i, p in enumerate(papers, 1):
+        p["idx"] = i
+
+    out = output_path or json_path
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump(papers, f, ensure_ascii=False, indent=2)
+    print(f"[resolve] {matched} matched EBSCO ({matched_pdf} with PDF), {unmatched} unmatched")
+    print(f"[resolve] Saved enriched papers.json → {out}")
+
+    # Regenerate manifest.csv alongside
+    manifest_csv = os.path.join(os.path.dirname(out), "manifest.csv")
+    with open(manifest_csv, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["idx", "year", "first_author", "title", "venue", "doi", "has_pdf", "ebsco_id", "ebsco_unmatched", "oa_url", "source"])
+        for i, p in enumerate(papers, 1):
+            w.writerow([f"{i:03d}", p.get("year", ""), p.get("first_author", ""),
+                        p.get("title", ""), p.get("venue", ""), p.get("doi", ""),
+                        p.get("has_pdf", False), p.get("ebsco_id", ""),
+                        p.get("ebsco_unmatched", ""), p.get("oa_url", ""),
+                        ";".join(p.get("sources", [])) if isinstance(p.get("sources"), list) else p.get("source", "")])
+    print(f"[resolve] Manifest: {manifest_csv}")
+    return papers
+
+
 # ── PDF Download ────────────────────────────────────────────────
 
 def _recover_session(cdp: CDPClient) -> bool:
@@ -812,9 +1007,18 @@ def download_pdfs(cdp: CDPClient, manifest_path: str, output_dir: str = ".", chu
         with open(json_path) as f:
             papers = json.load(f)
 
-        pdf_papers = [p for p in papers if p.get("pdf_url")]
+        # Download URL priority: EBSCO pdf_url (institutional, primary) →
+        # oa_url (open-access web fallback, set by resolve for unmatched papers).
+        pdf_papers = []
+        for p in papers:
+            url = p.get("pdf_url") or p.get("oa_url")
+            if url:
+                p["_dl_url"] = url
+                pdf_papers.append(p)
         total = len(pdf_papers)
-        print(f"[download] {total}/{len(papers)} papers have PDF links")
+        ebsco_n = sum(1 for p in pdf_papers if p.get("pdf_url"))
+        oa_n = total - ebsco_n
+        print(f"[download] {total}/{len(papers)} papers downloadable ({ebsco_n} via EBSCO, {oa_n} via OA fallback)")
 
         if total == 0:
             print("[download] No PDFs to download.")
@@ -872,7 +1076,7 @@ def download_pdfs(cdp: CDPClient, manifest_path: str, output_dir: str = ".", chu
         for i, p in enumerate(pending):
             name = _paper_filename(p)
             doi = (p.get("doi") or "").strip().lower()
-            all_items.append({"url": p["pdf_url"], "name": name, "idx": i + 1, "doi": doi})
+            all_items.append({"url": p.get("_dl_url") or p["pdf_url"], "name": name, "idx": i + 1, "doi": doi})
             if doi:
                 pending_dois[i + 1] = doi
 
@@ -1132,6 +1336,12 @@ def main():
     stp = sub.add_parser("status", help="Check existing content in a project directory")
     stp.add_argument("directory", nargs="?", default="./refs", help="Project directory to check (e.g., refs/patents-top5)")
 
+    # resolve subcommand — enrich web-discovered papers with EBSCO pdf_url
+    rp = sub.add_parser("resolve", help="Resolve web-discovered papers.json against EBSCO (attach ebsco_id + pdf_url)")
+    rp.add_argument("--manifest", required=True, help="Path to web-discovered papers.json")
+    rp.add_argument("--output", "-o", default=None, help="Output path (default: in-place)")
+    rp.add_argument("--title-threshold", type=float, default=0.85, help="Min Levenshtein title similarity for fuzzy match (default 0.85)")
+
     # download subcommand
     dp = sub.add_parser("download")
     dp.add_argument("--manifest", required=True, help="Path to papers.json or manifest.csv")
@@ -1178,6 +1388,10 @@ def main():
 
         elif args.command == "status":
             cmd_status(args.directory)
+
+        elif args.command == "resolve":
+            setup_session(cdp)
+            resolve(cdp, args.manifest, args.output, args.title_threshold)
 
         elif args.command == "download":
             setup_session(cdp)

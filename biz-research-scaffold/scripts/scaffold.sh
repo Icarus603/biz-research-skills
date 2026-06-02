@@ -20,7 +20,10 @@ if [[ -e "$BASE" ]]; then
   echo "NOTICE: $BASE exists but is empty — scaffolding in-place"
 fi
 
-mkdir -p "$BASE"/{data/raw,data/processed,code,output/tables,output/figures,output/logs,refs/notes,paper}
+# refs/ created empty — literature skills create per-project slug subdirs
+# (refs/{slug}/pdfs, refs/{slug}/notes, refs/{slug}/web, ...) on demand.
+# Do NOT pre-create a flat refs/notes — contradicts the refs/{slug}/ convention.
+mkdir -p "$BASE"/{data/raw,data/processed,code,output/tables,output/figures,output/logs,refs,paper}
 touch "$BASE"/data/README.md "$BASE"/code/README.md "$BASE"/paper/README.md
 
 # .gitignore from template

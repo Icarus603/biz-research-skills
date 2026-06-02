@@ -20,7 +20,9 @@ if (Test-Path $BASE) {
   Write-Output "NOTICE: $BASE exists but is empty -- scaffolding in-place"
 }
 
-@("data\raw","data\processed","code","output\tables","output\figures","output\logs","refs","refs\notes","paper") |
+# refs created empty -- literature skills create per-project slug subdirs
+# (refs\{slug}\pdfs, refs\{slug}\notes, ...) on demand. No flat refs\notes.
+@("data\raw","data\processed","code","output\tables","output\figures","output\logs","refs","paper") |
   ForEach-Object { New-Item -ItemType Directory -Force -Path "$BASE\$_" | Out-Null }
 
 "" | Set-Content "$BASE\data\README.md"
