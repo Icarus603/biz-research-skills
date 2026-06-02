@@ -334,10 +334,15 @@ def _save_cookies(cdp: CDPClient, cookie_file: str):
 
 # ── Search JS (runs in browser via CDP) ─────────────────────────
 
-def build_search_js(query: str, journals: list[str], years: str, max_count: int = 500) -> str:
+def build_search_js(query: str, journals: list[str], years: str, max_count: int = 500,
+                    full_text_only: bool = False, peer_reviewed_only: bool = False) -> str:
     """Build the bundled JavaScript for EBSCO search."""
     so_clause = " OR ".join(f'SO "{j}"' for j in journals)
     q = f"({so_clause}) AND ({query}) AND DT {years}"
+    if full_text_only:
+        q = f"({q}) AND FT y"
+    if peer_reviewed_only:
+        q = f"({q}) AND RV y"
     print(f"[search] Built query: {q[:200]}...")
 
     # Use a template file to avoid Python f-string brace hell
@@ -352,6 +357,7 @@ def build_search_js(query: str, journals: list[str], years: str, max_count: int 
     let offset = 0;
     const PER_PAGE = 50;
     let dbTotal = 0;
+    let facets = null;
 
     while (allPapers.length < MAX) {
         const resp = await fetch(API, {
@@ -372,6 +378,15 @@ def build_search_js(query: str, journals: list[str], years: str, max_count: int 
         const items = data?.search?.items || [];
         dbTotal = data?.search?.totalItems ?? dbTotal;
 
+        // Capture facets from first page
+        if (!facets && data?.search?.facets) {
+            facets = data.search.facets.map(f => ({
+                id: f.id,
+                label: f.label,
+                values: (f.values || []).map(v => ({value: v.value, count: v.count}))
+            }));
+        }
+
         for (const item of items) {
             const doi = item.doi || null;
             const key = doi || item.an || item.id;
@@ -387,6 +402,11 @@ def build_search_js(query: str, journals: list[str], years: str, max_count: int 
                 ? BASE + '/api/search/v1/record/' + item.id + '/fulltext/pdf?sourceRecordId=' + item.id + '&opid=k3svp7&intent=download'
                 : null;
 
+            // Extract subjects (DE = descriptors/keywords)
+            const subjects = (item.subjects || []).map(s =>
+                typeof s.name === 'string' ? s.name : (s.name?.value || '')
+            ).filter(Boolean);
+
             allPapers.push({
                 title, first_author: firstAuthor,
                 year: parseInt(year) || null,
@@ -396,6 +416,10 @@ def build_search_js(query: str, journals: list[str], years: str, max_count: int 
                 pdf_url: pdfUrl,
                 has_pdf: hasPDF,
                 peer_reviewed: item.peerReviewed || false,
+                doc_types: item.docTypes || [],
+                subjects: subjects,
+                page_count: item.pageCount || null,
+                publisher: item.publisherName || null,
                 abstract: typeof item.abstract === 'string' ? item.abstract?.slice(0, 500) : (item.abstract?.value?.slice(0, 500) || '')
             });
         }
@@ -408,6 +432,7 @@ def build_search_js(query: str, journals: list[str], years: str, max_count: int 
     return {
         total_found: allPapers.length,
         db_total: dbTotal,
+        facets: facets,
         query: QUERY,
         papers: allPapers
     };
@@ -415,19 +440,100 @@ def build_search_js(query: str, journals: list[str], years: str, max_count: int 
     return js_template.replace('__QUERY__', json.dumps(q)).replace('__MAX__', str(max_count))
 
 
+def cmd_status(directory: str = "./refs"):
+    """Print summary of existing content in a project directory. No Chrome needed."""
+    import glob as _glob
+    d = os.path.abspath(directory)
+    print(f"[status] Checking {d}")
+    if not os.path.isdir(d):
+        print(f"[status] Directory does not exist — nothing collected yet.")
+        return
+
+    # papers.json
+    json_path = os.path.join(d, "papers.json")
+    papers = []
+    if os.path.exists(json_path):
+        with open(json_path, encoding="utf-8") as f:
+            papers = json.load(f)
+        years_set = sorted(set(str(p.get("year", "?")) for p in papers if p.get("year")))
+        venues = {}
+        has_pdf_count = 0
+        for p in papers:
+            v = p.get("venue", "?")
+            venues[v] = venues.get(v, 0) + 1
+            if p.get("has_pdf"):
+                has_pdf_count += 1
+        print(f"[status] papers.json: {len(papers)} papers, {has_pdf_count} with PDF links")
+        print(f"[status]   Years: {years_set[0]}–{years_set[-1]}" if years_set else "[status]   Years: ?")
+        print(f"[status]   Venues: {', '.join(f'{v}({c})' for v, c in sorted(venues.items(), key=lambda x: -x[1]))}")
+    else:
+        print(f"[status] papers.json: not found (no search results yet)")
+
+    # pdfs/
+    pdf_dir = os.path.join(d, "pdfs")
+    if os.path.isdir(pdf_dir):
+        pdfs = [f for f in os.listdir(pdf_dir) if f.endswith(".pdf")]
+        total_size = sum(os.path.getsize(os.path.join(pdf_dir, f)) for f in pdfs)
+        size_mb = total_size / (1024 * 1024)
+        print(f"[status] pdfs/: {len(pdfs)} PDFs ({size_mb:.1f} MB)")
+
+        # downloaded.json sidecar
+        sidecar = os.path.join(pdf_dir, "downloaded.json")
+        if os.path.exists(sidecar):
+            with open(sidecar) as f:
+                dl = json.load(f)
+            print(f"[status]   downloaded.json: {len(dl)} entries (DOI dedup active)")
+    else:
+        print(f"[status] pdfs/: not found (no PDFs downloaded)")
+
+    # Check for search/ and supplement/ subdirs
+    for sub in ["search", "supplement"]:
+        sub_dir = os.path.join(d, sub)
+        if os.path.isdir(sub_dir):
+            jf = os.path.join(sub_dir, "papers.json")
+            if os.path.exists(jf):
+                with open(jf) as f:
+                    sp = json.load(f)
+                print(f"[status] {sub}/: {len(sp)} papers")
+        elif sub == "supplement":
+            pass  # optional
+        else:
+            print(f"[status] {sub}/: not found")
+
+    if not papers and not os.path.isdir(pdf_dir):
+        print(f"[status] → Empty project. Ready for fresh search.")
+
+
 def search(cdp: CDPClient, query: str, journals: list[str], years: str,
-            max_count: int = 500, output_dir: str = "."):
+            max_count: int = 500, output_dir: str = ".", merge_with_existing: bool = False,
+            full_text_only: bool = False, peer_reviewed_only: bool = False):
     """Run EBSCO search and save results."""
     print(f"[search] Query: {query}")
     print(f"[search] Journals: {journals}")
     print(f"[search] Date range: {years}")
+    if full_text_only:
+        print(f"[search] Limiter: FT y (full text only)")
+    if peer_reviewed_only:
+        print(f"[search] Limiter: RV y (peer reviewed only)")
 
-    js = build_search_js(query, journals, years, max_count)
+    js = build_search_js(query, journals, years, max_count, full_text_only, peer_reviewed_only)
     print(f"[search] Running search (max {max_count} papers)...")
 
     result = cdp.eval(js, await_promise=True, timeout_ms=300_000)
     papers = result.get("papers", [])
     raw_count = len(papers)
+
+    # Print facets summary (journal distribution, subjects, etc.)
+    facets = result.get("facets")
+    if facets:
+        print(f"[search] Facets from EBSCO (db total: {result.get('db_total', '?')}):")
+        for facet in facets:
+            if not facet.get("values"):
+                continue
+            label = facet.get("label", facet.get("id", "?"))
+            top = facet["values"][:10]
+            summary = ", ".join(f'{v["value"]}({v["count"]})' for v in top)
+            print(f"[search]   {label}: {summary}")
 
     # Filter to exact journal matches (EBSCO SO field does substring matching)
     if journals:
@@ -453,9 +559,45 @@ def search(cdp: CDPClient, query: str, journals: list[str], years: str,
         p["idx"] = i
     print(f"[search] Found {raw_count} raw, {len(papers)} after journal filter")
 
+    # Merge with existing results if --merge flag
+    merged_with_existing = 0
+    json_path = os.path.join(output_dir, "papers.json")
+    if merge_with_existing and os.path.exists(json_path):
+        with open(json_path, encoding="utf-8") as f:
+            existing = json.load(f)
+        # Build dedup index by DOI (preferred) or ebsco_id
+        seen_doi = set()
+        seen_eid = set()
+        for p in existing:
+            doi = (p.get("doi") or "").strip().lower()
+            eid = (p.get("ebsco_id") or "").strip()
+            if doi:
+                seen_doi.add(doi)
+            if eid:
+                seen_eid.add(eid)
+        new_papers = []
+        for p in papers:
+            doi = (p.get("doi") or "").strip().lower()
+            eid = (p.get("ebsco_id") or "").strip()
+            if (doi and doi in seen_doi) or (eid and eid in seen_eid):
+                merged_with_existing += 1
+                continue
+            new_papers.append(p)
+            if doi:
+                seen_doi.add(doi)
+            if eid:
+                seen_eid.add(eid)
+        papers = existing + new_papers
+        print(f"[search] Merged: {len(new_papers)} new + {len(existing)} existing = {len(papers)} total ({merged_with_existing} duplicates skipped)")
+    else:
+        print(f"[search] {len(papers)} papers (merge off — overwriting output)")
+
+    # Re-index
+    for i, p in enumerate(papers, 1):
+        p["idx"] = i
+
     # Save JSON
     os.makedirs(output_dir, exist_ok=True)
-    json_path = os.path.join(output_dir, "papers.json")
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(papers, f, ensure_ascii=False, indent=2)
     print(f"[search] Saved to {json_path}")
@@ -464,9 +606,12 @@ def search(cdp: CDPClient, query: str, journals: list[str], years: str,
     manifest_path = os.path.join(output_dir, "manifest.csv")
     with open(manifest_path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["idx", "year", "first_author", "title", "venue", "doi", "has_pdf", "source"])
+        w.writerow(["idx", "year", "first_author", "title", "venue", "doi", "has_pdf", "doc_types", "subjects", "source"])
         for i, p in enumerate(papers, 1):
-            w.writerow([f"{i:03d}", p["year"], p["first_author"], p["title"], p["venue"], p.get("doi", ""), p["has_pdf"], "ebsco"])
+            doc_types = ";".join(p.get("doc_types", []))
+            subjects = ";".join(p.get("subjects", [])[:5])  # first 5 subjects
+            w.writerow([f"{i:03d}", p["year"], p["first_author"], p["title"], p["venue"],
+                        p.get("doi", ""), p["has_pdf"], doc_types, subjects, "ebsco"])
     print(f"[search] Manifest: {manifest_path}")
 
     return papers
@@ -868,6 +1013,13 @@ def main():
     sp.add_argument("--years", default="2022-2026", help="Date range")
     sp.add_argument("--max", type=int, default=500, help="Max papers to retrieve")
     sp.add_argument("--output", "-o", default="./refs", help="Output directory")
+    sp.add_argument("--merge", action="store_true", help="Merge with existing papers.json instead of overwriting")
+    sp.add_argument("--full-text", action="store_true", help="Only return papers with full text available (FT y)")
+    sp.add_argument("--peer-reviewed", action="store_true", help="Only return peer-reviewed papers (RV y)")
+
+    # status subcommand
+    stp = sub.add_parser("status", help="Check existing content in a project directory")
+    stp.add_argument("directory", nargs="?", default="./refs", help="Project directory to check (e.g., refs/patents-top5)")
 
     # download subcommand
     dp = sub.add_parser("download")
@@ -910,7 +1062,11 @@ def main():
             if not journals:
                 print("Warning: No --journals specified. Searching all sources.")
             setup_session(cdp)
-            search(cdp, args.query, journals, args.years, args.max, args.output)
+            search(cdp, args.query, journals, args.years, args.max, args.output, args.merge,
+                   args.full_text, args.peer_reviewed)
+
+        elif args.command == "status":
+            cmd_status(args.directory)
 
         elif args.command == "download":
             setup_session(cdp)

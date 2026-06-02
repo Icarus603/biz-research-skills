@@ -9,10 +9,11 @@ Systematic literature discovery + bulk PDF download via CUFE WebVPN + EBSCO.
 
 ```
 Topic
-  -> Phase 0: TOPIC ANALYSIS (classify -> domain mapping)
-  -> Phase 1: SEARCH (EBSCO API via CDP, parallel keyword + domain queries, auto-filter by journal)
-  -> Phase 2: DOWNLOAD (parallel fetch+base64 decode, DOI dedup, retry on transient errors)
-  -> Phase 3: MANIFEST (manifest.csv + papers.json + downloaded.json sidecar)
+  -> Phase 0: STATUS CHECK (check existing refs/ content — NEVER skip this)
+  -> Phase 1: TOPIC ANALYSIS (classify -> domain mapping)
+  -> Phase 2: SEARCH (EBSCO API via CDP, parallel keyword + domain queries, auto-filter by journal)
+  -> Phase 3: DOWNLOAD (parallel fetch+base64 decode, DOI dedup, retry on transient errors)
+  -> Phase 4: MANIFEST (manifest.csv + papers.json + downloaded.json sidecar)
 ```
 
 ## Output Convention (MANDATORY)
@@ -37,11 +38,13 @@ refs/
 ```
 
 **Rules for agents:**
-1. `--output` for `search` always points to `refs/{project-slug}/search/`
-2. `--output` for `download` is OMITTED — it auto-derives `pdfs/` from the manifest directory
-3. After all searches complete, merge + deduplicate into `refs/{project-slug}/papers.json` and `manifest.csv`
-4. Project slug: kebab-case, short, descriptive. Derived from user's request topic.
-5. Never write directly into `refs/` root — always into a project subdirectory.
+1. **ALWAYS run `status` FIRST** — before any search. Check what already exists.
+2. `--output` for `search` always points to `refs/{project-slug}/search/`
+3. `--output` for `download` is OMITTED — it auto-derives `pdfs/` from the manifest directory
+4. After all searches complete, merge + deduplicate into `refs/{project-slug}/papers.json` and `manifest.csv`
+5. Project slug: kebab-case, short, descriptive. Derived from user's request topic.
+6. Never write directly into `refs/` root — always into a project subdirectory.
+7. Use `--merge` flag on subsequent searches to avoid overwriting previous results.
 
 ## Prerequisites
 
@@ -74,7 +77,19 @@ chmod 600 ~/.cufe_credentials
 
 ---
 
-## Phase 0: Topic Analysis
+## Phase 0: Status Check (ALWAYS FIRST)
+
+Before any search, check what already exists:
+
+```bash
+python3 scripts/ebsco_pipeline.py status refs/{project-slug}/
+```
+
+Reports: paper count, year range, venue distribution, PDF count/disk size, sidecar state. No Chrome needed.
+
+---
+
+## Phase 1: Topic Analysis (build query)
 
 **CRITICAL — keyword search fails for empirical-measure topics.** Before searching, classify the topic:
 
@@ -98,7 +113,7 @@ Supported journal lists in `references/journal_lists.md`.
 
 ---
 
-## Phase 1: Search
+## Phase 2: Search
 
 ### CLI
 
@@ -119,13 +134,17 @@ python3 scripts/ebsco_pipeline.py search "innovation OR patent OR R&D" \
 
 2. **Search** (EBSCO API via CDP `Runtime.evaluate`):
    - POST to `https://research-ebsco-com-443.webvpn.cufe.edu.cn/api/search/v1/search?applyAllLimiters=true`
-   - EBSCO query syntax with `SO`, `AND`, `OR`, `DT` field codes
+   - EBSCO query syntax with `SO`, `AND`, `OR`, `DT`, `DE`, `SU`, `FT`, `RV`, `N{n}`, `W{n}` field codes
    - Pagination: 50 per page, auto-page until `max` papers or exhausted
-   - Each paper: title, author, year, venue, DOI, abstract, has_pdf flag, pdf_url
+   - **Extracts**: subjects (DE descriptors), doc_types, page_count, publisher
+   - **Facets**: journal + subject distribution auto-printed
+   - `--full-text`: add `FT y` limiter (skip no-PDF papers)
+   - `--peer-reviewed`: add `RV y` limiter
+   - `--merge`: append to existing papers.json with DOI dedup
 
 3. **Output**:
-   - `papers.json` — full metadata with `idx`, `pdf_url`, `has_pdf`
-   - `manifest.csv` — idx, year, author, title, venue, doi, has_pdf, source
+   - `papers.json` — full metadata with `idx`, `pdf_url`, `has_pdf`, `subjects`, `doc_types`, `page_count`, `publisher`
+   - `manifest.csv` — idx, year, author, title, venue, doi, has_pdf, doc_types, subjects, source
 
 ### EBSCO query syntax
 
@@ -135,9 +154,15 @@ python3 scripts/ebsco_pipeline.py search "innovation OR patent OR R&D" \
 | `SO` | Source/Journal | `SO "American Economic Review"` |
 | `DT` | Date range | `DT 2022-2026` |
 | `AB` | Abstract | `AB patent` |
+| `DE` | Descriptor/Keyword | `DE "Patents"` — **most precise** |
 | `SU` | Subject | `SU innovation` |
 | `AU` | Author | `AU Acemoglu` |
-| `FT` | Full text available | `FT y` |
+| `FT` | Full text available | `FT y` (also available as `--full-text` flag) |
+| `RV` | Peer reviewed | `RV y` (also available as `--peer-reviewed` flag) |
+| `N{n}` | Near operator | `patent N5 litigation` |
+| `W{n}` | Within operator | `trade W3 patent` |
+
+**Precision tip**: `DE "Patents"` uses EBSCO controlled vocabulary — far more precise than keyword search. Combine: `(DE "Patents" OR TI patent OR AB patent)` for recall + precision.
 
 Full API reference: `references/ebsco_search_api.md`
 
@@ -147,7 +172,7 @@ EBSCO's `SO` field does **substring matching** (e.g., `SO "Journal of Political 
 
 ---
 
-## Phase 2: Download
+## Phase 3: Download
 
 ### CLI
 
@@ -187,7 +212,7 @@ Retry count for transient failures (HTTP 403, timeouts, network errors). Default
 
 ---
 
-## Phase 3: Manifest
+## Phase 4: Manifest
 
 Generated automatically by the search command:
 
