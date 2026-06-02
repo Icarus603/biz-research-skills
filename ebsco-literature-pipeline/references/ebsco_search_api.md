@@ -178,14 +178,51 @@ Innovation/patent papers by journal, 2022-2026, query `(innovation OR patent OR 
 
 ## Search strategy for empirical-measure topics
 
-**Problem**: Papers about "X" (e.g., patents) are titled about "Y" (e.g., innovation). Searching for TI "patent" misses 95%+ of relevant papers.
+**Problem**: Papers about "X" (e.g., patents) are sometimes titled about the research domain "Y" (e.g., innovation). But the topic word still appears in abstracts, subjects (DE), or as part of the title phrase.
 
-**Solution**: Search for the RESEARCH DOMAIN, not the measure name.
+**WRONG approach — domain-only search**: `innovation OR R&D OR "technological change"` returns hundreds of papers about firm dynamics, technology adoption, management — most unrelated to patents. Precision drops to 30-40%.
 
-| Topic (measure) | Domain search terms |
-|----------------|-------------------|
-| Patents | `innovation OR R&D OR "technological change" OR "knowledge spillover" OR inventor OR "creative destruction" OR "endogenous growth"` |
-| Credit scores | `"consumer credit" OR "household finance" OR "credit market" OR borrowing OR default` |
-| Satellite data | `"remote sensing" OR "earth observation" OR deforestation OR agriculture OR "nighttime lights"` |
+**Correct approach — anchor on controlled vocabulary, add domain terms for recall only.**
 
-Combine with journal filter: `(SO "Journal1" OR SO "Journal2") AND (domain terms) AND DT YYYY-YYYY`
+### Step 1: Identify the EBSCO `DE` descriptor for the topic
+
+`DE` uses EBSCO's controlled vocabulary — far more precise than free-text search. Check EBSCO thesaurus for exact descriptor values:
+
+| Topic | Primary `DE` descriptors |
+|-------|--------------------------|
+| Patents | `DE "Patents"`, `DE "Intellectual Property"`, `DE "Patent Law"` |
+| Credit scores | `DE "Credit Ratings"`, `DE "Credit Risk"` |
+| Satellite data | `DE "Remote Sensing"`, `DE "Satellites"` |
+
+### Step 2: Build the anchor query
+
+```
+(DE "Patents" OR DE "Intellectual Property" OR TI patent OR AB patent OR TI "intellectual property")
+```
+
+### Step 3: Optionally add domain terms for recall (additive only)
+
+Only append domain terms with `OR` to catch papers that avoid the topic word entirely. NEVER replace the anchor:
+
+```
+(DE "Patents" OR DE "Intellectual Property" OR TI patent OR AB patent) OR (TI inventor AND AB "R&D")
+```
+
+### Full example — patents in Top-5 econ, 2022-2026
+
+```
+(SO "American Economic Review" OR SO "Quarterly Journal of Economics" OR SO "Journal of Political Economy" OR SO "Econometrica" OR SO "Review of Economic Studies")
+AND
+(DE "Patents" OR DE "Intellectual Property" OR TI patent OR AB patent OR TI "intellectual property" OR TI inventor)
+AND DT 2022-2026
+```
+
+### Domain supplement patterns (additive recall only, use with caution)
+
+| Topic | Recall supplement — only add if anchor returns too few |
+|-------|-------------------------------------------------------|
+| Patents | `OR (TI inventor AND AB innovation)` or `OR TI "patent protection"` |
+| Credit scores | `OR (TI credit AND AB score)` or `OR DE "Consumer Credit"` |
+| Satellite data | `OR TI "nighttime lights"` or `OR (AB satellite AND AB deforestation)` |
+
+Combine with journal filter: `{JOURNAL_FILTER} AND ({anchor query}) AND DT YYYY-YYYY`

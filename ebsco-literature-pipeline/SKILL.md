@@ -96,10 +96,25 @@ Reports: paper count, year range, venue distribution, PDF count/disk size, sidec
 | Type | Definition | Example | Strategy |
 |------|-----------|---------|----------|
 | **A: Direct topic** | Paper titles contain the topic word | "minimum wage", "carbon tax", "Brexit" | Keyword search suffices |
-| **B: Empirical measure** | Papers use this as DATA but titles describe the RESEARCH DOMAIN | "patents" -> "innovation", "credit scores" -> "consumer credit", "scanner data" -> "consumer behavior" | **Domain search** required |
+| **B: Empirical measure** | Papers use this as DATA but some titles describe the RESEARCH DOMAIN | "patents" → some papers titled "innovation"; "credit scores" → some papers titled "consumer credit" | **Anchor on controlled vocab + TI/AB, add domain terms for recall** |
 | **C: Broad theme** | Papers study this but don't name it explicitly | "inequality", "economic development" | Hybrid: domain + keyword |
 
-**Rule for Type B/C**: Search the RESEARCH DOMAIN, not the topic word. E.g., for "patents", search `innovation OR R&D OR "technological change" OR inventor`, not `patent` alone. See `references/ebsco_search_api.md` for domain-term mappings.
+**Rule for ALL types — NEVER drop the topic word.** Use EBSCO's `DE` (controlled vocabulary descriptor) as the precision anchor. `TI` and `AB` expand recall. Domain terms are ADDITIVE only.
+
+**Correct query construction for Type B:**
+```
+(DE "Patents" OR DE "Intellectual Property" OR TI patent OR AB patent OR TI "intellectual property")
+```
+Then combine with journal filter and date range. Do NOT replace the topic with domain terms.
+
+**Why domain-only fails**: `innovation OR R&D OR "technological change"` in Top-5 econ journals returns hundreds of papers about firm dynamics, technology adoption, management — most with zero connection to patents. Precision collapses to 30-40%.
+
+**When to add domain terms**: Only for recall boost on top of the anchor. Use `OR` to append, never to replace:
+```
+(DE "Patents" OR DE "Intellectual Property" OR TI patent OR AB patent) OR (TI inventor AND AB "R&D")
+```
+
+See `references/ebsco_search_api.md` for `DE` descriptor values and domain-term patterns.
 
 ### Journal scope
 
@@ -118,7 +133,8 @@ Supported journal lists in `references/journal_lists.md`.
 ### CLI
 
 ```bash
-python3 scripts/ebsco_pipeline.py search "innovation OR patent OR R&D" \
+# Anchor on DE + TI/AB — never drop topic word for domain-only terms
+python3 scripts/ebsco_pipeline.py search "DE \"Patents\" OR DE \"Intellectual Property\" OR TI patent OR AB patent OR TI inventor" \
   --journals "American Economic Review,Quarterly Journal of Economics,Journal of Political Economy,Econometrica,Review of Economic Studies" \
   --years 2022-2026 \
   --max 500 \
@@ -317,7 +333,8 @@ echo 'CUFE_PASSWORD=密码' >> ~/.cufe_credentials
 chmod 600 ~/.cufe_credentials
 
 # 2. Search — always into refs/{project-slug}/search/
-python3 scripts/ebsco_pipeline.py search "innovation OR patent OR R&D OR \"intellectual property\" OR inventor" \
+# Anchor on DE (controlled vocab) + TI/AB. Domain terms are additive recall only.
+python3 scripts/ebsco_pipeline.py search "DE \"Patents\" OR DE \"Intellectual Property\" OR TI patent OR AB patent OR TI \"intellectual property\" OR TI inventor" \
   --journals "American Economic Review,Quarterly Journal of Economics,Journal of Political Economy,Econometrica,Review of Economic Studies" \
   --years 2022-2026 --max 500 --output ./refs/my-project/search/
 
