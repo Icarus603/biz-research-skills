@@ -23,6 +23,7 @@ import os
 import sys
 import time
 import csv
+import base64
 from pathlib import Path
 from cdp_client import CDPClient
 
@@ -343,10 +344,31 @@ def search(cdp: CDPClient, query: str, journals: list[str], years: str,
 
     result = cdp.eval(js, await_promise=True, timeout_ms=300_000)
     papers = result.get("papers", [])
+    raw_count = len(papers)
+
+    # Filter to exact journal matches (EBSCO SO field does substring matching)
+    if journals:
+        def _norm(v):
+            return v.strip().lower().replace('&amp;', '&').replace('.', '').replace('  ', ' ')
+        journal_norms = {_norm(j) for j in journals}
+        filtered = []
+        rejected = []
+        for p in papers:
+            vn = _norm(p.get("venue", ""))
+            if vn in journal_norms:
+                filtered.append(p)
+            else:
+                rejected.append(vn)
+        if rejected:
+            from collections import Counter
+            rc = Counter(rejected)
+            print(f"[search] Filtered out {len(papers)-len(filtered)} non-matching papers ({len(rc)} other journals)")
+        papers = filtered
+
     # Assign idx for later download reference
     for i, p in enumerate(papers, 1):
         p["idx"] = i
-    print(f"[search] Found {len(papers)} papers")
+    print(f"[search] Found {raw_count} raw, {len(papers)} after journal filter")
 
     # Save JSON
     os.makedirs(output_dir, exist_ok=True)
@@ -371,18 +393,25 @@ def search(cdp: CDPClient, query: str, journals: list[str], years: str,
 
 def _paper_filename(paper: dict) -> str:
     """Build a safe filename for a paper: FirstAuthor_Year_Title.pdf"""
-    title_slug = "".join(c if c.isalnum() or c in " _-" else "" for c in (paper.get('title', '') or 'unknown')[:60]).strip().replace(" ", "_")[:60]
+    import html as _html
+    title = (paper.get('title', '') or 'unknown')
+    # Decode HTML entities (&amp; → &, &lt; → <, etc.)
+    title = _html.unescape(title)
+    title_slug = "".join(c if c.isalnum() or c in " _-" else "" for c in title[:60]).strip().replace(" ", "_")[:60]
     name = f"{paper.get('first_author','unknown')}_{paper.get('year','')}_{title_slug}"
     return "".join(c if c.isalnum() or c in "_-" else "_" for c in name)[:120] + ".pdf"
 
 
 def _download_chunk_js(chunk_items: list) -> str:
-    """Build the JS for downloading one chunk of PDFs via fetch+blob+click."""
+    """Build JS that fetches PDFs as blobs and returns them as base64 data URLs.
+
+    Returns data to Python via CDP eval result — no Chrome download manager needed.
+    Each result has {name, idx, ok, size, data} where data is a 'data:application/pdf;base64,...' URL.
+    """
     return """async () => {
     const items = """ + json.dumps(chunk_items) + """;
     const CONCURRENCY = 10;
     const results = [];
-    // Fetch in sub-batches of CONCURRENCY to avoid overwhelming the connection
     for (let i = 0; i < items.length; i += CONCURRENCY) {
         const sub = items.slice(i, i + CONCURRENCY);
         const fetched = await Promise.all(sub.map(async (item) => {
@@ -390,31 +419,26 @@ def _download_chunk_js(chunk_items: list) -> str:
                 const resp = await fetch(item.url);
                 if (!resp.ok) return Object.assign({}, item, {error: 'HTTP '+resp.status});
                 const ct = resp.headers.get('content-type') || '';
-                if (!ct.includes('pdf')) return Object.assign({}, item, {error: 'not PDF'});
+                if (!ct.includes('pdf')) return Object.assign({}, item, {error: 'not PDF: '+ct});
                 const blob = await resp.blob();
-                const blobUrl = URL.createObjectURL(blob);
-                return Object.assign({}, item, {blobUrl, size: blob.size, ok: true});
+                const dataUrl = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result);
+                    reader.onerror = () => reject(reader.error);
+                    reader.readAsDataURL(blob);
+                });
+                return Object.assign({}, item, {ok: true, size: blob.size, data: dataUrl});
             } catch(e) {
-                return Object.assign({}, item, {error: e.message});
+                return Object.assign({}, item, {error: e.message || String(e)});
             }
         }));
-        // Trigger downloads for this sub-batch
         for (const f of fetched) {
-            if (f.blobUrl) {
-                const a = document.createElement('a');
-                a.href = f.blobUrl;
-                a.download = f.name;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                setTimeout(function() { URL.revokeObjectURL(f.blobUrl); }, 10000);
-                results.push({idx: f.idx, ok: true, size: f.size, name: f.name});
+            if (f.ok) {
+                results.push({idx: f.idx, ok: true, size: f.size, name: f.name, data: f.data});
             } else {
                 results.push({idx: f.idx, ok: false, error: f.error, name: f.name});
             }
         }
-        // Brief pause between sub-batches so Chrome can flush downloads
-        await new Promise(function(r) { setTimeout(r, 500); });
     }
     return results;
 }"""
@@ -433,15 +457,19 @@ def _move_from_downloads(names: list[str], target_dir: str) -> int:
     return moved
 
 
-def download_pdfs(cdp: CDPClient, manifest_path: str, output_dir: str = ".", chunk_size: int = 30):
+def download_pdfs(cdp: CDPClient, manifest_path: str, output_dir: str = ".", chunk_size: int = 15, retry_count: int = 1):
     """Download PDFs for papers with pdf_url.
 
-    Downloads in chunks of chunk_size. Each chunk is a separate CDP eval call
-    with its own timeout, so large batches don't time out. Files are moved from
-    ~/Downloads/ to output_dir after every chunk (Chrome ignores downloadPath
-    for blob URLs, so files always land in ~/Downloads/ first).
+    Fetches PDFs via CDP eval as base64 data URLs, decodes them in Python,
+    and writes directly to disk. No reliance on Chrome's download manager.
+    Retries transient failures (403, timeout, network errors) individually.
+    HTTP 400 errors are NOT retried (permanent — bad URL / no access).
     """
     json_path = manifest_path.replace(".csv", ".json") if manifest_path.endswith(".csv") else manifest_path
+    if not os.path.exists(json_path):
+        alt = os.path.join(os.path.dirname(json_path), "papers.json")
+        if os.path.exists(alt):
+            json_path = alt
     with open(json_path) as f:
         papers = json.load(f)
 
@@ -455,26 +483,41 @@ def download_pdfs(cdp: CDPClient, manifest_path: str, output_dir: str = ".", chu
 
     abs_output = os.path.abspath(output_dir)
     os.makedirs(abs_output, exist_ok=True)
-
-    # Set download behavior (best-effort; blob URLs ignore downloadPath so we
-    # also move files from ~/Downloads as a fallback)
-    cdp._call("Browser.setDownloadBehavior", {
-        "behavior": "allowAndName",
-        "downloadPath": abs_output,
-        "eventsEnabled": True
-    })
     print(f"[download] Output dir: {abs_output}")
 
-    # Skip already-downloaded papers
-    existing = set(os.listdir(abs_output))
+    # ── DOI-based dedup ────────────────────────────────────────────
+    # Load/downloaded.json sidecar: {doi: filename}. Survives filename format changes.
+    sidecar_path = os.path.join(abs_output, "downloaded.json")
+    if os.path.exists(sidecar_path):
+        with open(sidecar_path) as f:
+            downloaded_map = json.load(f)
+    else:
+        downloaded_map = {}
+
+    # Also reconcile with actual files on disk
+    actual_files = set(f for f in os.listdir(abs_output) if f.endswith('.pdf') and f != "downloaded.json")
+    # Files on disk not in sidecar → add by filename (best-effort, no DOI)
+    for fname in actual_files:
+        if fname not in downloaded_map.values():
+            downloaded_map[f"file:{fname}"] = fname
+
     pending = []
     skipped = 0
     for p in pdf_papers:
+        doi = (p.get("doi") or "").strip().lower()
         fname = _paper_filename(p)
-        if fname in existing:
+        # Check by DOI first, then by filename
+        if doi and doi in downloaded_map:
+            # Verify file still exists; if not, re-download
+            if os.path.exists(os.path.join(abs_output, downloaded_map[doi])):
+                skipped += 1
+                continue
+            else:
+                del downloaded_map[doi]
+        if fname in downloaded_map.values():
             skipped += 1
-        else:
-            pending.append(p)
+            continue
+        pending.append(p)
 
     if skipped > 0:
         print(f"[download] {skipped}/{total} already downloaded, {len(pending)} remaining")
@@ -484,16 +527,21 @@ def download_pdfs(cdp: CDPClient, manifest_path: str, output_dir: str = ".", chu
         return len(pdf_papers)
 
     # Build chunk items for all pending papers
+    pending_dois = {}  # idx → doi for sidecar recording
     all_items = []
     for i, p in enumerate(pending):
         name = _paper_filename(p)
-        all_items.append({"url": p["pdf_url"], "name": name, "idx": i + 1})
+        doi = (p.get("doi") or "").strip().lower()
+        all_items.append({"url": p["pdf_url"], "name": name, "idx": i + 1, "doi": doi})
+        if doi:
+            pending_dois[i + 1] = doi
 
     # Process in chunks
     chunks = [all_items[i:i + chunk_size] for i in range(0, len(all_items), chunk_size)]
-    total_ok = skipped  # count already-downloaded as OK
+    total_ok = skipped
     total_fail = 0
-    chunk_timeout_ms = max(120_000, chunk_size * 5_000)  # scale timeout with chunk size
+    retry_queue: list[dict] = []  # items to retry individually
+    chunk_timeout_ms = max(120_000, chunk_size * 15_000)
 
     for ci, chunk in enumerate(chunks):
         chunk_start = ci * chunk_size + 1
@@ -505,41 +553,110 @@ def download_pdfs(cdp: CDPClient, manifest_path: str, output_dir: str = ".", chu
             results = cdp.eval(js, await_promise=True, timeout_ms=chunk_timeout_ms)
         except Exception as e:
             print(f"[download] Chunk {ci+1} eval failed: {e}")
-            # Try to move whatever made it to ~/Downloads
-            moved = _move_from_downloads([item["name"] for item in chunk], abs_output)
-            if moved > 0:
-                print(f"[download]   Recovered {moved} files from ~/Downloads")
-                total_ok += moved
-            total_fail += len(chunk) - moved
+            # Queue entire chunk for retry (timeout / network errors are transient)
+            for item in chunk:
+                retry_queue.append({**item, "_last_error": str(e)})
             continue
 
         chunk_ok = 0
-        chunk_fail = 0
-        ok_names = []
         for r in (results or []):
-            if r.get("ok"):
-                chunk_ok += 1
-                ok_names.append(r["name"])
-                print(f"[download]   {r['idx']}/{len(all_items)}: {r['name']} ({r.get('size',0)//1024}KB)")
+            if r.get("ok") and r.get("data"):
+                try:
+                    data_url = r["data"]
+                    b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
+                    pdf_bytes = base64.b64decode(b64)
+                    fpath = os.path.join(abs_output, r["name"])
+                    with open(fpath, "wb") as fout:
+                        fout.write(pdf_bytes)
+                    size_kb = len(pdf_bytes) // 1024
+                    chunk_ok += 1
+                    # Record DOI → filename for future dedup
+                    doi = pending_dois.get(r["idx"])
+                    if doi:
+                        downloaded_map[doi] = r["name"]
+                    else:
+                        downloaded_map[f"file:{r['name']}"] = r["name"]
+                    print(f"[download]   {r['idx']}/{len(all_items)}: {r['name']} ({size_kb}KB)")
+                except Exception as e:
+                    total_fail += 1
+                    print(f"[download]   {r['idx']}/{len(all_items)}: DECODE_ERR {r['name']} - {e}")
             else:
-                chunk_fail += 1
-                print(f"[download]   {r['idx']}/{len(all_items)}: SKIP {r['name']} - {r.get('error','?')}")
-
-        # Move files from ~/Downloads immediately (don't wait for all chunks)
-        moved = _move_from_downloads(ok_names, abs_output)
-        if moved < chunk_ok:
-            print(f"[download]   Moved {moved}/{chunk_ok} to output (rest may still be saving, will retry at end)")
+                err = r.get("error", "?")
+                # HTTP 400 = permanent, don't retry
+                if "HTTP 400" in str(err):
+                    total_fail += 1
+                    print(f"[download]   {r['idx']}/{len(all_items)}: SKIP {r['name']} - {err} (permanent)")
+                else:
+                    retry_queue.append({"url": r.get("url", ""), "name": r["name"], "idx": r["idx"], "doi": pending_dois.get(r["idx"], ""), "_last_error": str(err)})
+                    print(f"[download]   {r['idx']}/{len(all_items)}: FAIL {r['name']} - {err} (will retry)")
 
         total_ok += chunk_ok
-        total_fail += chunk_fail
+        # Save sidecar after each chunk
+        with open(sidecar_path, "w") as f:
+            json.dump(downloaded_map, f, indent=2)
 
-    # Final sweep: move any remaining files from ~/Downloads
-    final_moved = _move_from_downloads([_paper_filename(p) for p in pdf_papers], abs_output)
-    if final_moved > 0:
-        print(f"[download] Final sweep: moved {final_moved} more files from ~/Downloads")
+    # ── Retry phase ───────────────────────────────────────────────
+    if retry_queue and retry_count > 0:
+        print(f"\n[download] Retry phase: {len(retry_queue)} papers, {retry_count} attempt(s)...")
+        for attempt in range(1, retry_count + 1):
+            if not retry_queue:
+                break
+            print(f"[download] Retry attempt {attempt}/{retry_count} ({len(retry_queue)} papers)...")
+            still_failed = []
+            # Retry one at a time for reliability
+            for item in retry_queue:
+                js = _download_chunk_js([item])
+                try:
+                    results = cdp.eval(js, await_promise=True, timeout_ms=60_000)
+                except Exception as e:
+                    still_failed.append({**item, "_last_error": str(e)})
+                    print(f"[download]   RETRY {item['idx']}: {item['name']} - eval error: {e}")
+                    continue
+
+                r = (results or [{}])[0]
+                if r.get("ok") and r.get("data"):
+                    try:
+                        data_url = r["data"]
+                        b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
+                        pdf_bytes = base64.b64decode(b64)
+                        fpath = os.path.join(abs_output, item["name"])
+                        with open(fpath, "wb") as fout:
+                            fout.write(pdf_bytes)
+                        size_kb = len(pdf_bytes) // 1024
+                        total_ok += 1
+                        doi = item.get("doi", "")
+                        if doi:
+                            downloaded_map[doi] = item["name"]
+                        print(f"[download]   RETRY {item['idx']}: OK {item['name']} ({size_kb}KB)")
+                    except Exception as e:
+                        still_failed.append(item)
+                        print(f"[download]   RETRY {item['idx']}: DECODE_ERR {item['name']} - {e}")
+                else:
+                    err = r.get("error", "?")
+                    if "HTTP 400" in str(err):
+                        total_fail += 1
+                        print(f"[download]   RETRY {item['idx']}: SKIP {item['name']} - {err} (permanent)")
+                    elif attempt == retry_count:
+                        total_fail += 1
+                        still_failed.append(item)
+                        print(f"[download]   RETRY {item['idx']}: FAIL {item['name']} - {err} (exhausted)")
+                    else:
+                        still_failed.append({**item, "_last_error": str(err)})
+                        print(f"[download]   RETRY {item['idx']}: STILL {item['name']} - {err}")
+
+            retry_queue = still_failed
+
+        # Any left in retry_queue after all attempts = permanent failure
+        total_fail += len(retry_queue)
+        if retry_queue:
+            print(f"[download] {len(retry_queue)} papers failed after {retry_count} retries")
+
+    # Save final sidecar
+    with open(sidecar_path, "w") as f:
+        json.dump(downloaded_map, f, indent=2)
 
     final_count = len([f for f in os.listdir(abs_output) if f.endswith('.pdf')])
-    print(f"[download] Done. {final_count} PDFs on disk ({total_fail} failed/403, {total_ok} OK)")
+    print(f"[download] Done. {final_count} PDFs on disk ({total_fail} failed, {total_ok} OK)")
     return total_ok
 
 
@@ -595,7 +712,8 @@ def main():
     dp = sub.add_parser("download")
     dp.add_argument("--manifest", required=True, help="Path to papers.json or manifest.csv")
     dp.add_argument("--output", "-o", default="./papers", help="Output directory for PDFs")
-    dp.add_argument("--chunk-size", type=int, default=30, help="PDFs per chunk (default 30, lower if timeout)")
+    dp.add_argument("--chunk-size", type=int, default=15, help="PDFs per chunk (default 15)")
+    dp.add_argument("--retry", type=int, default=1, help="Retry count for transient failures (default 1)")
 
     args = parser.parse_args()
 
@@ -620,7 +738,7 @@ def main():
 
         elif args.command == "download":
             setup_session(cdp)
-            download_pdfs(cdp, args.manifest, args.output, args.chunk_size)
+            download_pdfs(cdp, args.manifest, args.output, args.chunk_size, args.retry)
 
     finally:
         cdp.close()
