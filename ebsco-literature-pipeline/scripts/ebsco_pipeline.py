@@ -872,7 +872,7 @@ def main():
     # download subcommand
     dp = sub.add_parser("download")
     dp.add_argument("--manifest", required=True, help="Path to papers.json or manifest.csv")
-    dp.add_argument("--output", "-o", default="./refs", help="Output directory for PDFs")
+    dp.add_argument("--output", "-o", default=None, help="Output directory for PDFs (default: <manifest_dir>/pdfs/)")
     dp.add_argument("--chunk-size", type=int, default=15, help="PDFs per chunk (default 15)")
     dp.add_argument("--retry", type=int, default=1, help="Retry count for transient failures (default 1)")
 
@@ -914,7 +914,12 @@ def main():
 
         elif args.command == "download":
             setup_session(cdp)
-            download_pdfs(cdp, args.manifest, args.output, args.chunk_size, args.retry)
+            output_dir = args.output
+            if output_dir is None:
+                # Auto-derive: <manifest_dir>/pdfs/
+                manifest_dir = os.path.dirname(os.path.abspath(args.manifest))
+                output_dir = os.path.join(manifest_dir, "pdfs")
+            download_pdfs(cdp, args.manifest, output_dir, args.chunk_size, args.retry)
 
     finally:
         cdp.close()

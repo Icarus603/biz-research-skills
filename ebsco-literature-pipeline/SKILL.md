@@ -15,6 +15,34 @@ Topic
   -> Phase 3: MANIFEST (manifest.csv + papers.json + downloaded.json sidecar)
 ```
 
+## Output Convention (MANDATORY)
+
+**Every invocation MUST follow this layout. No exceptions. No ad-hoc paths.**
+
+```
+refs/
+  {project-slug}/              # kebab-case, e.g. "patents-top5", "ai-labor-market"
+    papers.json                # merged metadata (all searches deduplicated)
+    manifest.csv               # merged manifest for human review
+    search/                    # raw primary search results
+      papers.json
+      manifest.csv
+    supplement/                # supplementary searches (if any)
+      {query-slug}/
+        papers.json
+        manifest.csv
+    pdfs/                      # downloaded PDFs (download command auto-creates this)
+      downloaded.json          # DOI → filename sidecar
+      Author_Year_Title.pdf
+```
+
+**Rules for agents:**
+1. `--output` for `search` always points to `refs/{project-slug}/search/`
+2. `--output` for `download` is OMITTED — it auto-derives `pdfs/` from the manifest directory
+3. After all searches complete, merge + deduplicate into `refs/{project-slug}/papers.json` and `manifest.csv`
+4. Project slug: kebab-case, short, descriptive. Derived from user's request topic.
+5. Never write directly into `refs/` root — always into a project subdirectory.
+
 ## Prerequisites
 
 - CUFE WebVPN credentials in `~/.cufe_credentials` (one-time setup)
@@ -237,14 +265,14 @@ echo 'CUFE_USERNAME=学号' > ~/.cufe_credentials
 echo 'CUFE_PASSWORD=密码' >> ~/.cufe_credentials
 chmod 600 ~/.cufe_credentials
 
-# 2. Just run — Chrome auto-starts, auto-logs in
+# 2. Search — always into refs/{project-slug}/search/
 python3 scripts/ebsco_pipeline.py search "innovation OR patent OR R&D OR \"intellectual property\" OR inventor" \
   --journals "American Economic Review,Quarterly Journal of Economics,Journal of Political Economy,Econometrica,Review of Economic Studies" \
-  --years 2022-2026 --max 500 --output ./refs/
+  --years 2022-2026 --max 500 --output ./refs/my-project/search/
 
-# 3. Download PDFs (parallel fetch + base64 decode, 15 per chunk)
-python3 scripts/ebsco_pipeline.py download --manifest ./refs/papers.json --chunk-size 15
+# 3. Download PDFs — omit --output, auto-goes to refs/my-project/pdfs/
+python3 scripts/ebsco_pipeline.py download --manifest ./refs/my-project/papers.json --chunk-size 15
 
 # 4. Results
-ls ./refs/*.pdf          # PDFs saved directly to --output dir
-cat refs/manifest.csv    # Paper metadata
+ls ./refs/my-project/pdfs/        # PDF files
+cat ./refs/my-project/manifest.csv  # Paper metadata
