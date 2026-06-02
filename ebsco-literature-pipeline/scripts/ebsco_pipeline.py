@@ -690,6 +690,48 @@ def search(cdp: CDPClient, query: str, journals: list[str], years: str,
 
 # ── PDF Download ────────────────────────────────────────────────
 
+def _recover_session(cdp: CDPClient) -> bool:
+    """Full session recovery: restart Chrome + re-auth VPN/EBSCO.
+
+    Call this when chunk evals start failing — cookie injection alone
+    won't fix an expired VPN session. Returns True if recovery succeeded.
+    """
+    print("[download] Session recovery: restarting Chrome + re-auth...")
+    cdp.close()
+    import subprocess as _sp
+
+    # Kill all Chrome processes on debug port
+    try:
+        result = _sp.run(["lsof", "-ti", "tcp:9222"], capture_output=True, text=True)
+        for pid_str in result.stdout.strip().split("\n"):
+            if pid_str:
+                try:
+                    os.kill(int(pid_str), 9)
+                except OSError:
+                    pass
+    except Exception:
+        pass
+    time.sleep(3)
+
+    # Restart Chrome
+    ensure_chrome()
+    time.sleep(2)
+
+    # Reconnect CDP
+    try:
+        cdp.connect()
+    except Exception as e:
+        print(f"[download] Reconnect failed: {e}")
+        return False
+
+    # Re-establish EBSCO session (full SSO, not just cookie injection)
+    if not setup_session(cdp):
+        print("[download] Session recovery: setup_session failed")
+        return False
+
+    print("[download] Session recovery: OK")
+    return True
+
 def _paper_filename(paper: dict) -> str:
     """Build a safe filename for a paper: FirstAuthor_Year_Title.pdf"""
     import html as _html
@@ -848,47 +890,34 @@ def download_pdfs(cdp: CDPClient, manifest_path: str, output_dir: str = ".", chu
 
             # ── Health check before each chunk ──────────────────────
             if not cdp.ping():
-                print("[download] CDP connection lost. Attempting reconnect...")
-                try:
-                    cdp.reconnect()
-                    time.sleep(2)
-                    # Re-establish EBSCO session after reconnect
-                    # Cookie injection should still work since cookies persist
-                    cdp._call("Network.enable", {})
-                    cookie_file = os.path.expanduser("~/.cache/ebsco-pipeline/session_cookies.json")
-                    if os.path.exists(cookie_file):
-                        with open(cookie_file) as f:
-                            cookies = json.load(f)
-                        for key, c in cookies.items():
-                            try:
-                                cdp._call("Network.setCookie", {
-                                    "name": c["name"], "value": c["value"],
-                                    "domain": c["domain"], "path": c.get("path", "/"),
-                                    "httpOnly": c.get("httpOnly", False),
-                                    "secure": c.get("secure", False),
-                                })
-                            except Exception:
-                                pass
-                        # Navigate back to EBSCO
-                        cdp._call("Page.navigate", {"url": "https://research-ebsco-com-443.webvpn.cufe.edu.cn/c/k3svp7/search"}, timeout_ms=30000)
-                        time.sleep(3)
-                    print("[download] Reconnected.")
-                except Exception as e:
-                    print(f"[download] Reconnect failed: {e}")
-                    # Queue chunk for retry
+                print("[download] CDP connection lost. Attempting full session recovery...")
+                if not _recover_session(cdp):
+                    print("[download] Session recovery failed. Queueing chunk for retry.")
                     for item in chunk:
-                        retry_queue.append({**item, "_last_error": f"CDP reconnect failed: {e}"})
+                        retry_queue.append({**item, "_last_error": "CDP dead, recovery failed"})
                     continue
+                print("[download] Session recovered, resuming chunk.")
 
             js = _download_chunk_js(chunk)
             try:
                 results = cdp.eval(js, await_promise=True, timeout_ms=chunk_timeout_ms)
             except Exception as e:
                 print(f"[download] Chunk {ci+1} eval failed: {e}")
-                # Queue entire chunk for retry (timeout / network errors are transient)
-                for item in chunk:
-                    retry_queue.append({**item, "_last_error": str(e)})
-                continue
+                # Session may be dead — attempt full recovery before retrying
+                if _recover_session(cdp):
+                    # Retry the failed chunk immediately with fresh session
+                    print(f"[download] Re-running chunk {ci+1} after recovery...")
+                    try:
+                        results = cdp.eval(js, await_promise=True, timeout_ms=chunk_timeout_ms)
+                    except Exception as e2:
+                        print(f"[download] Chunk {ci+1} still failed after recovery: {e2}")
+                        for item in chunk:
+                            retry_queue.append({**item, "_last_error": str(e2)})
+                        continue
+                else:
+                    for item in chunk:
+                        retry_queue.append({**item, "_last_error": str(e)})
+                    continue
 
             chunk_ok = 0
             for r in (results or []):
