@@ -511,6 +511,16 @@ def search(cdp: CDPClient, query: str, journals: list[str], years: str,
     print(f"[search] Query: {query}")
     print(f"[search] Journals: {journals}")
     print(f"[search] Date range: {years}")
+
+    # Warn if SO terms are in query but --journals not used
+    if not journals:
+        import re as _re2
+        so_hits = _re2.findall(r'SO\s+"([^"]+)"', query)
+        if so_hits:
+            print(f"[search] ⚠  SO terms in query but --journals not set. Journal filter is OFF.")
+            print(f"[search] ⚠  EBSCO SO does substring matching — non-target journals WILL leak through.")
+            print(f"[search] ⚠  Add: --journals \"{', '.join(so_hits[:5])}\"")
+
     if full_text_only:
         print(f"[search] Limiter: FT y (full text only)")
     if peer_reviewed_only:
@@ -535,16 +545,77 @@ def search(cdp: CDPClient, query: str, journals: list[str], years: str,
             summary = ", ".join(f'{v["value"]}({v["count"]})' for v in top)
             print(f"[search]   {label}: {summary}")
 
-    # Filter to exact journal matches (EBSCO SO field does substring matching)
+    # Filter to journal matches (EBSCO SO field does substring matching).
+    # Venue names from EBSCO are messy — publisher prefixes, "The" variants,
+    # citation-text leakage, etc. We normalize aggressively before matching.
     if journals:
-        def _norm(v):
-            return v.strip().lower().replace('&amp;', '&').replace('.', '').replace('  ', ' ')
+        import re as _re
+
+        # Publisher / database prefixes that may appear in venue strings
+        _PUBLISHER_PREFIXES = [
+            r'^oxford university press(?: \(oup\))?,\s*',
+            r'^president and fellows of harvard college,\s*',
+            r'^university of chicago press,\s*',
+            r'^american economic association,\s*',
+            r'^wiley-blackwell,\s*',
+            r'^wiley,\s*',
+            r'^taylor\s*&amp;\s*francis(?: journals)?,\s*',
+            r'^elsevier(?: b\.?v\.?)?,\s*',
+            r'^centro de economia politica,\s*',
+            r'^institute of economic research,\s*',
+            r'^instytut badan gospodarczych,\s*',
+        ]
+        # Extra text that sometimes leaks into the venue string
+        _TAIL_JUNK = [
+            r'\s*;\s*volume\b.*$',
+            r'\s*;\s*issn\b.*$',
+            r'\s*;\s*vol\.\s*\d+.*$',
+            r'\s*vol\.\s*\d+.*$',
+        ]
+
+        def _norm(v: str) -> str:
+            v = v.strip()
+            # Decode HTML entities
+            v = v.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+            # Strip publisher prefixes
+            for pat in _PUBLISHER_PREFIXES:
+                v = _re.sub(pat, '', v, flags=_re.IGNORECASE)
+            # Strip trailing citation junk
+            for pat in _TAIL_JUNK:
+                v = _re.sub(pat, '', v, flags=_re.IGNORECASE)
+            v = v.strip()
+            # Remove "The " prefix (case-insensitive)
+            v = _re.sub(r'^the\s+', '', v, flags=_re.IGNORECASE)
+            # Normalize: lowercase, drop periods, collapse whitespace
+            v = v.lower().replace('.', '').replace('  ', ' ').strip()
+            return v
+
         journal_norms = {_norm(j) for j in journals}
         filtered = []
         rejected = []
         for p in papers:
             vn = _norm(p.get("venue", ""))
-            if vn in journal_norms:
+            # Try exact match first, then contains match
+            matched = vn in journal_norms
+            if not matched:
+                # Check if the normalized venue CONTAINS any normalized journal name
+                # (handles residual prefixes / suffixes the publisher list didn't cover)
+                for jn in journal_norms:
+                    if jn in vn or vn in jn:
+                        # Extra guard: reject false-positives where journal name is
+                        # embedded in a longer name (e.g. "brazilian journal of political economy"
+                        # contains "journal of political economy" but is NOT JPE)
+                        if jn == 'journal of political economy' and ('macro' in vn or 'brazilian' in vn or 'scottish' in vn or 'european' in vn or 'international' in vn or 'equilibrium' in vn):
+                            continue
+                        if jn == 'american economic review' and 'insights' in vn:
+                            continue
+                        if jn == 'quarterly journal of economics' and ('equilibrium' in vn or 'management' in vn):
+                            continue
+                        if jn == 'econometrica' and 'econometric' in vn and vn != 'econometrica':
+                            continue
+                        matched = True
+                        break
+            if matched:
                 filtered.append(p)
             else:
                 rejected.append(vn)
