@@ -24,8 +24,92 @@ import sys
 import time
 import csv
 import base64
+import tempfile
 from pathlib import Path
 from cdp_client import CDPClient
+
+# ── Process lock (prevent concurrent runs on same output dir) ──────
+
+def _atomic_write_json(path: str, data):
+    """Write JSON atomically: temp file + rename. Survives crashes."""
+    tmp = path + ".tmp." + str(os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)  # atomic on POSIX
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _acquire_lock(output_dir: str) -> object:
+    """Acquire a file lock for the output directory.
+
+    Writes PID + timestamp to .pipeline.lock. If a lock already exists
+    and the PID is still alive, raises RuntimeError. Stale locks (dead
+    PIDs) are cleaned up automatically.
+
+    Returns a lock context that can be released via _release_lock().
+    """
+    lock_path = os.path.join(output_dir, ".pipeline.lock")
+    os.makedirs(output_dir, exist_ok=True)
+
+    for _ in range(3):  # retry a few times in case of race
+        try:
+            # Try to create lock file exclusively
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o644)
+        except FileExistsError:
+            # Lock file exists — check if it's stale
+            try:
+                with open(lock_path) as f:
+                    existing = json.load(f)
+                old_pid = existing.get("pid")
+                if old_pid:
+                    # Check if PID is alive
+                    try:
+                        os.kill(old_pid, 0)
+                        # PID is alive — concurrent run detected
+                        raise RuntimeError(
+                            f"Another pipeline instance is running on this output directory "
+                            f"(PID {old_pid}, since {existing.get('started','?')}). "
+                            f"Wait for it to finish or remove {lock_path} manually."
+                        )
+                    except OSError:
+                        # PID is dead — stale lock, clean it
+                        print(f"[lock] Stale lock from dead PID {old_pid}, cleaning...")
+                        os.unlink(lock_path)
+                        continue
+                else:
+                    os.unlink(lock_path)
+                    continue
+            except RuntimeError:
+                raise
+            except Exception:
+                os.unlink(lock_path)
+                continue
+        else:
+            # We own the lock
+            lock_data = {
+                "pid": os.getpid(),
+                "started": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            with os.fdopen(fd, "w") as f:
+                json.dump(lock_data, f)
+            return lock_path
+
+    raise RuntimeError(f"Cannot acquire lock on {output_dir} after 3 attempts")
+
+
+def _release_lock(lock_path: str):
+    """Release a previously acquired lock."""
+    try:
+        os.unlink(lock_path)
+    except OSError:
+        pass
+
 
 # ── VPN / EBSCO session setup ───────────────────────────────────
 
@@ -244,8 +328,7 @@ def _save_cookies(cdp: CDPClient, cookie_file: str):
         except Exception as e:
             print(f"  [warn] getCookies {domain}: {e}")
     os.makedirs(os.path.dirname(cookie_file), exist_ok=True)
-    with open(cookie_file, "w") as f:
-        json.dump(all_cookies, f, indent=2, ensure_ascii=False)
+    _atomic_write_json(cookie_file, all_cookies)
     print(f"[setup] Saved {len(all_cookies)} cookies to {cookie_file}")
 
 
@@ -447,219 +530,302 @@ def _download_chunk_js(chunk_items: list) -> str:
 def download_pdfs(cdp: CDPClient, manifest_path: str, output_dir: str = ".", chunk_size: int = 15, retry_count: int = 1):
     """Download PDFs for papers with pdf_url.
 
-    Fetches PDFs via CDP eval as base64 data URLs, decodes them in Python,
-    and writes directly to disk. No reliance on Chrome's download manager.
-    Retries transient failures (403, timeout, network errors) individually.
-    HTTP 400 errors are NOT retried (permanent — bad URL / no access).
+    Acquires a process lock on the output directory BEFORE any file I/O.
     """
-    json_path = manifest_path.replace(".csv", ".json") if manifest_path.endswith(".csv") else manifest_path
-    if not os.path.exists(json_path):
-        alt = os.path.join(os.path.dirname(json_path), "papers.json")
-        if os.path.exists(alt):
-            json_path = alt
-    with open(json_path) as f:
-        papers = json.load(f)
-
-    pdf_papers = [p for p in papers if p.get("pdf_url")]
-    total = len(pdf_papers)
-    print(f"[download] {total}/{len(papers)} papers have PDF links")
-
-    if total == 0:
-        print("[download] No PDFs to download.")
-        return 0
-
     abs_output = os.path.abspath(output_dir)
     os.makedirs(abs_output, exist_ok=True)
     print(f"[download] Output dir: {abs_output}")
 
-    # ── DOI-based dedup ────────────────────────────────────────────
-    # Load/downloaded.json sidecar: {doi: filename}. Survives filename format changes.
-    sidecar_path = os.path.join(abs_output, "downloaded.json")
-    if os.path.exists(sidecar_path):
-        with open(sidecar_path) as f:
-            downloaded_map = json.load(f)
-    else:
-        downloaded_map = {}
+    # ── Acquire process lock FIRST, before any file reads ──────────
+    lock_path = _acquire_lock(abs_output)
+    print(f"[download] Lock acquired (PID {os.getpid()})")
 
-    # Also reconcile with actual files on disk
-    actual_files = set(f for f in os.listdir(abs_output) if f.endswith('.pdf') and f != "downloaded.json")
-    # Files on disk not in sidecar → add by filename (best-effort, no DOI)
-    for fname in actual_files:
-        if fname not in downloaded_map.values():
-            downloaded_map[f"file:{fname}"] = fname
+    try:
+        json_path = manifest_path.replace(".csv", ".json") if manifest_path.endswith(".csv") else manifest_path
+        if not os.path.exists(json_path):
+            alt = os.path.join(os.path.dirname(json_path), "papers.json")
+            if os.path.exists(alt):
+                json_path = alt
+        with open(json_path) as f:
+            papers = json.load(f)
 
-    pending = []
-    skipped = 0
-    for p in pdf_papers:
-        doi = (p.get("doi") or "").strip().lower()
-        fname = _paper_filename(p)
-        # Check by DOI first, then by filename
-        if doi and doi in downloaded_map:
-            # Verify file still exists; if not, re-download
-            if os.path.exists(os.path.join(abs_output, downloaded_map[doi])):
+        pdf_papers = [p for p in papers if p.get("pdf_url")]
+        total = len(pdf_papers)
+        print(f"[download] {total}/{len(papers)} papers have PDF links")
+
+        if total == 0:
+            print("[download] No PDFs to download.")
+            return 0
+        # ── DOI-based dedup ────────────────────────────────────────────
+        # Load downloaded.json sidecar: {doi: filename}. Survives filename format changes.
+        sidecar_path = os.path.join(abs_output, "downloaded.json")
+        if os.path.exists(sidecar_path):
+            with open(sidecar_path) as f:
+                downloaded_map = json.load(f)
+        else:
+            downloaded_map = {}
+
+        # Also reconcile with actual files on disk
+        actual_files = set(f for f in os.listdir(abs_output) if f.endswith('.pdf') and f != "downloaded.json")
+        # Files on disk not in sidecar → add by filename (best-effort, no DOI)
+        for fname in actual_files:
+            if fname not in downloaded_map.values():
+                downloaded_map[f"file:{fname}"] = fname
+
+        pending = []
+        skipped = 0
+        for p in pdf_papers:
+            doi = (p.get("doi") or "").strip().lower()
+            fname = _paper_filename(p)
+            # Check by DOI first, then by filename
+            if doi and doi in downloaded_map:
+                # Verify file still exists; if not, re-download
+                if os.path.exists(os.path.join(abs_output, downloaded_map[doi])):
+                    skipped += 1
+                    continue
+                else:
+                    del downloaded_map[doi]
+            if fname in downloaded_map.values():
                 skipped += 1
                 continue
-            else:
-                del downloaded_map[doi]
-        if fname in downloaded_map.values():
-            skipped += 1
-            continue
-        pending.append(p)
+            pending.append(p)
 
-    if skipped > 0:
-        print(f"[download] {skipped}/{total} already downloaded, {len(pending)} remaining")
+        if skipped > 0:
+            print(f"[download] {skipped}/{total} already downloaded, {len(pending)} remaining")
 
-    if not pending:
-        print("[download] All PDFs already downloaded.")
-        return len(pdf_papers)
+        if not pending:
+            print("[download] All PDFs already downloaded.")
+            return len(pdf_papers)
 
-    # Build chunk items for all pending papers
-    pending_dois = {}  # idx → doi for sidecar recording
-    all_items = []
-    for i, p in enumerate(pending):
-        name = _paper_filename(p)
-        doi = (p.get("doi") or "").strip().lower()
-        all_items.append({"url": p["pdf_url"], "name": name, "idx": i + 1, "doi": doi})
-        if doi:
-            pending_dois[i + 1] = doi
+        # Build chunk items for all pending papers
+        pending_dois = {}  # idx → doi for sidecar recording
+        all_items = []
+        for i, p in enumerate(pending):
+            name = _paper_filename(p)
+            doi = (p.get("doi") or "").strip().lower()
+            all_items.append({"url": p["pdf_url"], "name": name, "idx": i + 1, "doi": doi})
+            if doi:
+                pending_dois[i + 1] = doi
 
-    # Process in chunks
-    chunks = [all_items[i:i + chunk_size] for i in range(0, len(all_items), chunk_size)]
-    total_ok = skipped
-    total_fail = 0
-    retry_queue: list[dict] = []  # items to retry individually
-    chunk_timeout_ms = max(120_000, chunk_size * 15_000)
+        # Process in chunks
+        chunks = [all_items[i:i + chunk_size] for i in range(0, len(all_items), chunk_size)]
+        total_ok = skipped
+        total_fail = 0
+        retry_queue: list[dict] = []  # items to retry individually
+        chunk_timeout_ms = max(120_000, chunk_size * 15_000)
 
-    for ci, chunk in enumerate(chunks):
-        chunk_start = ci * chunk_size + 1
-        chunk_end = chunk_start + len(chunk) - 1
-        print(f"[download] Chunk {ci+1}/{len(chunks)} (papers {chunk_start}-{chunk_end}, {len(chunk)} PDFs)...")
+        for ci, chunk in enumerate(chunks):
+            chunk_start = ci * chunk_size + 1
+            chunk_end = chunk_start + len(chunk) - 1
+            print(f"[download] Chunk {ci+1}/{len(chunks)} (papers {chunk_start}-{chunk_end}, {len(chunk)} PDFs)...")
 
-        js = _download_chunk_js(chunk)
-        try:
-            results = cdp.eval(js, await_promise=True, timeout_ms=chunk_timeout_ms)
-        except Exception as e:
-            print(f"[download] Chunk {ci+1} eval failed: {e}")
-            # Queue entire chunk for retry (timeout / network errors are transient)
-            for item in chunk:
-                retry_queue.append({**item, "_last_error": str(e)})
-            continue
-
-        chunk_ok = 0
-        for r in (results or []):
-            if r.get("ok") and r.get("data"):
+            # ── Health check before each chunk ──────────────────────
+            if not cdp.ping():
+                print("[download] CDP connection lost. Attempting reconnect...")
                 try:
-                    data_url = r["data"]
-                    b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
-                    pdf_bytes = base64.b64decode(b64)
-                    fpath = os.path.join(abs_output, r["name"])
-                    with open(fpath, "wb") as fout:
-                        fout.write(pdf_bytes)
-                    size_kb = len(pdf_bytes) // 1024
-                    chunk_ok += 1
-                    # Record DOI → filename for future dedup
-                    doi = pending_dois.get(r["idx"])
-                    if doi:
-                        downloaded_map[doi] = r["name"]
-                    else:
-                        downloaded_map[f"file:{r['name']}"] = r["name"]
-                    print(f"[download]   {r['idx']}/{len(all_items)}: {r['name']} ({size_kb}KB)")
+                    cdp.reconnect()
+                    time.sleep(2)
+                    # Re-establish EBSCO session after reconnect
+                    # Cookie injection should still work since cookies persist
+                    cdp._call("Network.enable", {})
+                    cookie_file = os.path.expanduser("~/.cache/ebsco-pipeline/session_cookies.json")
+                    if os.path.exists(cookie_file):
+                        with open(cookie_file) as f:
+                            cookies = json.load(f)
+                        for key, c in cookies.items():
+                            try:
+                                cdp._call("Network.setCookie", {
+                                    "name": c["name"], "value": c["value"],
+                                    "domain": c["domain"], "path": c.get("path", "/"),
+                                    "httpOnly": c.get("httpOnly", False),
+                                    "secure": c.get("secure", False),
+                                })
+                            except Exception:
+                                pass
+                        # Navigate back to EBSCO
+                        cdp._call("Page.navigate", {"url": "https://research-ebsco-com-443.webvpn.cufe.edu.cn/c/k3svp7/search"}, timeout_ms=30000)
+                        time.sleep(3)
+                    print("[download] Reconnected.")
                 except Exception as e:
-                    total_fail += 1
-                    print(f"[download]   {r['idx']}/{len(all_items)}: DECODE_ERR {r['name']} - {e}")
-            else:
-                err = r.get("error", "?")
-                # HTTP 400 = permanent, don't retry
-                if "HTTP 400" in str(err):
-                    total_fail += 1
-                    print(f"[download]   {r['idx']}/{len(all_items)}: SKIP {r['name']} - {err} (permanent)")
-                else:
-                    retry_queue.append({"url": r.get("url", ""), "name": r["name"], "idx": r["idx"], "doi": pending_dois.get(r["idx"], ""), "_last_error": str(err)})
-                    print(f"[download]   {r['idx']}/{len(all_items)}: FAIL {r['name']} - {err} (will retry)")
-
-        total_ok += chunk_ok
-        # Save sidecar after each chunk
-        with open(sidecar_path, "w") as f:
-            json.dump(downloaded_map, f, indent=2)
-
-    # ── Retry phase ───────────────────────────────────────────────
-    if retry_queue and retry_count > 0:
-        print(f"\n[download] Retry phase: {len(retry_queue)} papers, {retry_count} attempt(s)...")
-        for attempt in range(1, retry_count + 1):
-            if not retry_queue:
-                break
-            print(f"[download] Retry attempt {attempt}/{retry_count} ({len(retry_queue)} papers)...")
-            still_failed = []
-            # Retry one at a time for reliability
-            for item in retry_queue:
-                js = _download_chunk_js([item])
-                try:
-                    results = cdp.eval(js, await_promise=True, timeout_ms=60_000)
-                except Exception as e:
-                    still_failed.append({**item, "_last_error": str(e)})
-                    print(f"[download]   RETRY {item['idx']}: {item['name']} - eval error: {e}")
+                    print(f"[download] Reconnect failed: {e}")
+                    # Queue chunk for retry
+                    for item in chunk:
+                        retry_queue.append({**item, "_last_error": f"CDP reconnect failed: {e}"})
                     continue
 
-                r = (results or [{}])[0]
+            js = _download_chunk_js(chunk)
+            try:
+                results = cdp.eval(js, await_promise=True, timeout_ms=chunk_timeout_ms)
+            except Exception as e:
+                print(f"[download] Chunk {ci+1} eval failed: {e}")
+                # Queue entire chunk for retry (timeout / network errors are transient)
+                for item in chunk:
+                    retry_queue.append({**item, "_last_error": str(e)})
+                continue
+
+            chunk_ok = 0
+            for r in (results or []):
                 if r.get("ok") and r.get("data"):
                     try:
                         data_url = r["data"]
                         b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
                         pdf_bytes = base64.b64decode(b64)
-                        fpath = os.path.join(abs_output, item["name"])
+                        fpath = os.path.join(abs_output, r["name"])
                         with open(fpath, "wb") as fout:
                             fout.write(pdf_bytes)
                         size_kb = len(pdf_bytes) // 1024
-                        total_ok += 1
-                        doi = item.get("doi", "")
+                        chunk_ok += 1
+                        # Record DOI → filename for future dedup
+                        doi = pending_dois.get(r["idx"])
                         if doi:
-                            downloaded_map[doi] = item["name"]
-                        print(f"[download]   RETRY {item['idx']}: OK {item['name']} ({size_kb}KB)")
+                            downloaded_map[doi] = r["name"]
+                        else:
+                            downloaded_map[f"file:{r['name']}"] = r["name"]
+                        print(f"[download]   {r['idx']}/{len(all_items)}: {r['name']} ({size_kb}KB)")
                     except Exception as e:
-                        still_failed.append(item)
-                        print(f"[download]   RETRY {item['idx']}: DECODE_ERR {item['name']} - {e}")
+                        total_fail += 1
+                        print(f"[download]   {r['idx']}/{len(all_items)}: DECODE_ERR {r['name']} - {e}")
                 else:
                     err = r.get("error", "?")
+                    # HTTP 400 = permanent, don't retry
                     if "HTTP 400" in str(err):
                         total_fail += 1
-                        print(f"[download]   RETRY {item['idx']}: SKIP {item['name']} - {err} (permanent)")
-                    elif attempt == retry_count:
-                        total_fail += 1
-                        still_failed.append(item)
-                        print(f"[download]   RETRY {item['idx']}: FAIL {item['name']} - {err} (exhausted)")
+                        print(f"[download]   {r['idx']}/{len(all_items)}: SKIP {r['name']} - {err} (permanent)")
                     else:
-                        still_failed.append({**item, "_last_error": str(err)})
-                        print(f"[download]   RETRY {item['idx']}: STILL {item['name']} - {err}")
+                        retry_queue.append({"url": r.get("url", ""), "name": r["name"], "idx": r["idx"], "doi": pending_dois.get(r["idx"], ""), "_last_error": str(err)})
+                        print(f"[download]   {r['idx']}/{len(all_items)}: FAIL {r['name']} - {err} (will retry)")
 
-            retry_queue = still_failed
+            total_ok += chunk_ok
+            # Save sidecar after each chunk (atomic write)
+            _atomic_write_json(sidecar_path, downloaded_map)
 
-        # Any left in retry_queue after all attempts = permanent failure
-        total_fail += len(retry_queue)
-        if retry_queue:
-            print(f"[download] {len(retry_queue)} papers failed after {retry_count} retries")
+        # ── Retry phase ───────────────────────────────────────────────
+        if retry_queue and retry_count > 0:
+            print(f"\n[download] Retry phase: {len(retry_queue)} papers, {retry_count} attempt(s)...")
+            for attempt in range(1, retry_count + 1):
+                if not retry_queue:
+                    break
+                print(f"[download] Retry attempt {attempt}/{retry_count} ({len(retry_queue)} papers)...")
+                still_failed = []
+                # Retry one at a time for reliability
+                for item in retry_queue:
+                    # Health check before each retry
+                    if not cdp.ping():
+                        try:
+                            cdp.reconnect()
+                            time.sleep(1)
+                        except Exception:
+                            still_failed.append({**item, "_last_error": "CDP dead during retry"})
+                            continue
 
-    # Save final sidecar
-    with open(sidecar_path, "w") as f:
-        json.dump(downloaded_map, f, indent=2)
+                    js = _download_chunk_js([item])
+                    try:
+                        results = cdp.eval(js, await_promise=True, timeout_ms=60_000)
+                    except Exception as e:
+                        still_failed.append({**item, "_last_error": str(e)})
+                        print(f"[download]   RETRY {item['idx']}: {item['name']} - eval error: {e}")
+                        continue
 
-    final_count = len([f for f in os.listdir(abs_output) if f.endswith('.pdf')])
-    print(f"[download] Done. {final_count} PDFs on disk ({total_fail} failed, {total_ok} OK)")
-    return total_ok
+                    r = (results or [{}])[0]
+                    if r.get("ok") and r.get("data"):
+                        try:
+                            data_url = r["data"]
+                            b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
+                            pdf_bytes = base64.b64decode(b64)
+                            fpath = os.path.join(abs_output, item["name"])
+                            with open(fpath, "wb") as fout:
+                                fout.write(pdf_bytes)
+                            size_kb = len(pdf_bytes) // 1024
+                            total_ok += 1
+                            doi = item.get("doi", "")
+                            if doi:
+                                downloaded_map[doi] = item["name"]
+                            print(f"[download]   RETRY {item['idx']}: OK {item['name']} ({size_kb}KB)")
+                        except Exception as e:
+                            still_failed.append(item)
+                            print(f"[download]   RETRY {item['idx']}: DECODE_ERR {item['name']} - {e}")
+                    else:
+                        err = r.get("error", "?")
+                        if "HTTP 400" in str(err):
+                            total_fail += 1
+                            print(f"[download]   RETRY {item['idx']}: SKIP {item['name']} - {err} (permanent)")
+                        elif attempt == retry_count:
+                            total_fail += 1
+                            still_failed.append(item)
+                            print(f"[download]   RETRY {item['idx']}: FAIL {item['name']} - {err} (exhausted)")
+                        else:
+                            still_failed.append({**item, "_last_error": str(err)})
+                            print(f"[download]   RETRY {item['idx']}: STILL {item['name']} - {err}")
+
+                retry_queue = still_failed
+                if retry_queue:
+                    _atomic_write_json(sidecar_path, downloaded_map)
+
+            # Any left in retry_queue after all attempts = permanent failure
+            total_fail += len(retry_queue)
+            if retry_queue:
+                print(f"[download] {len(retry_queue)} papers failed after {retry_count} retries")
+
+        # Save final sidecar (atomic write)
+        _atomic_write_json(sidecar_path, downloaded_map)
+
+        final_count = len([f for f in os.listdir(abs_output) if f.endswith('.pdf')])
+        print(f"[download] Done. {final_count} PDFs on disk ({total_fail} failed, {total_ok} OK)")
+        return total_ok
+
+    finally:
+        _release_lock(lock_path)
 
 
 # ── CLI ──────────────────────────────────────────────────────────
 
 def ensure_chrome(port: int = 9222, profile_dir: str = None):
-    """Ensure Chrome is running with remote debugging on the given port."""
+    """Ensure Chrome is running with remote debugging on the given port.
+
+    Checks if an existing Chrome on this port is healthy (has pages available).
+    If no pages or Chrome is unresponsive, kills it and starts fresh.
+    Uses a dedicated profile so it never conflicts with the user's normal Chrome.
+    """
     import subprocess as _sp
-    # Check if Chrome debug port is already available
-    try:
-        import urllib.request
-        urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2)
-        print(f"[chrome] Chrome already running on port {port}")
-        return
-    except Exception:
-        pass
+    import urllib.request
+
+    def _chrome_alive():
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2)
+            return True
+        except Exception:
+            return False
+
+    def _has_pages():
+        try:
+            resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/json", timeout=3)
+            pages = json.loads(resp.read())
+            return any(p.get("type") == "page" for p in pages)
+        except Exception:
+            return False
+
+    # Check existing Chrome
+    if _chrome_alive():
+        if _has_pages():
+            print(f"[chrome] Chrome already running on port {port} (healthy)")
+            return
+        else:
+            # Chrome is alive but has no pages — kill and restart
+            print("[chrome] Chrome running but no pages. Restarting...")
+            try:
+                # Find and kill the Chrome process on this port
+                result = _sp.run(
+                    ["lsof", "-ti", f"tcp:{port}"], capture_output=True, text=True
+                )
+                for pid_str in result.stdout.strip().split("\n"):
+                    if pid_str:
+                        try:
+                            os.kill(int(pid_str), 9)
+                        except OSError:
+                            pass
+            except Exception:
+                pass
+            time.sleep(2)
 
     # Start Chrome
     if profile_dir is None:
@@ -667,7 +833,6 @@ def ensure_chrome(port: int = 9222, profile_dir: str = None):
     os.makedirs(profile_dir, exist_ok=True)
     chrome_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
     if not os.path.exists(chrome_path):
-        # Try other common paths
         for p in ["/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium"]:
             if os.path.exists(p):
                 chrome_path = p
@@ -679,6 +844,15 @@ def ensure_chrome(port: int = 9222, profile_dir: str = None):
                "--no-first-run", "--no-default-browser-check"],
               stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
     time.sleep(4)
+
+    # Ensure at least one page is open by navigating to about:blank
+    try:
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/json/new?about:blank", timeout=5)
+        resp.read()
+        time.sleep(0.5)
+    except Exception:
+        pass
+
     print("[chrome] Chrome ready.")
 
 
@@ -713,7 +887,22 @@ def main():
 
     cdp = CDPClient()
     try:
-        cdp.connect()
+        # Retry connect in case Chrome needs a moment to create pages
+        for retry in range(3):
+            try:
+                cdp.connect()
+                break
+            except RuntimeError as e:
+                if "No page found" in str(e) and retry < 2:
+                    import urllib.request
+                    try:
+                        urllib.request.urlopen(f"http://127.0.0.1:9222/json/new?about:blank", timeout=3)
+                    except Exception:
+                        pass
+                    time.sleep(2)
+                    print(f"[main] Retrying connect ({retry+2}/3)...")
+                else:
+                    raise
 
         if args.command == "search":
             journals = [j.strip() for j in args.journals.split(",") if j.strip()]

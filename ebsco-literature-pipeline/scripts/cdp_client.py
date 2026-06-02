@@ -100,10 +100,34 @@ class CDPClient:
                 raise RuntimeError(str(msg)[:500])
         raise TimeoutError("eval timed out")
 
+    def ping(self, timeout_ms: int = 5000) -> bool:
+        """Check if CDP connection is alive by sending a lightweight eval."""
+        try:
+            result = self.eval("1+1", await_promise=False, timeout_ms=timeout_ms)
+            return result == 2
+        except Exception:
+            return False
+
+    def is_connected(self) -> bool:
+        """Check if underlying socket is alive."""
+        return self.sock is not None
+
+    def reconnect(self, page_url: str | None = None):
+        """Tear down and rebuild the CDP WebSocket connection."""
+        self.close()
+        time.sleep(1)
+        self.connect(page_url=page_url)
+
     def close(self):
         if self.sock:
-            self._send_frame(self.OPCODE_CLOSE, b"")
-            self.sock.close()
+            try:
+                self._send_frame(self.OPCODE_CLOSE, b"")
+            except Exception:
+                pass
+            try:
+                self.sock.close()
+            except Exception:
+                pass
             self.sock = None
 
     # ── HTTP helper ─────────────────────────────────────────────
@@ -191,7 +215,10 @@ class CDPClient:
     def _recv_exact(self, n: int) -> bytes:
         data = b""
         while len(data) < n:
-            chunk = self.sock.recv(n - len(data))
+            try:
+                chunk = self.sock.recv(n - len(data))
+            except (socket.timeout, TimeoutError, BlockingIOError):
+                continue
             if not chunk:
                 raise ConnectionError("WebSocket closed")
             data += chunk
@@ -206,7 +233,10 @@ class CDPClient:
         deadline = time.time() + timeout_ms / 1000
         buf = b""
         while time.time() < deadline:
-            opcode, data = self._recv_frame()
+            try:
+                opcode, data = self._recv_frame()
+            except (ConnectionError, TimeoutError, socket.timeout):
+                continue
             if opcode == self.OPCODE_TEXT:
                 buf += data
                 try:
@@ -218,8 +248,8 @@ class CDPClient:
                 except json.JSONDecodeError:
                     pass  # partial frame, keep accumulating
             elif opcode == self.OPCODE_CLOSE:
-                break
-        raise TimeoutError(f"CDP call {method} timed out")
+                raise ConnectionError("CDP: Chrome closed WebSocket")
+        raise TimeoutError(f"CDP call {method} timed out after {timeout_ms}ms")
 
     def _recv(self, timeout_ms: int = 5000) -> dict | None:
         """Block and receive next message."""
