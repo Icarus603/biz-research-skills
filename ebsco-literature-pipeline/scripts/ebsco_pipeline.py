@@ -13,9 +13,9 @@ Usage:
     python3 ebsco_pipeline.py search "innovation patent" \\
         --journals "American Economic Review,Quarterly Journal of Economics,Journal of Political Economy,Econometrica,Review of Economic Studies" \\
         --years 2022-2026 \\
-        --output ./papers/
+        --output ./refs/
 
-    python3 ebsco_pipeline.py download --manifest ./papers/manifest.csv
+    python3 ebsco_pipeline.py download --manifest ./refs/manifest.csv
 """
 
 import json
@@ -442,19 +442,6 @@ def _download_chunk_js(chunk_items: list) -> str:
     }
     return results;
 }"""
-
-
-def _move_from_downloads(names: list[str], target_dir: str) -> int:
-    """Move downloaded PDFs from ~/Downloads/ to target_dir. Returns count moved."""
-    dl_dir = os.path.expanduser("~/Downloads")
-    moved = 0
-    for name in names:
-        src = os.path.join(dl_dir, name)
-        dst = os.path.join(target_dir, name)
-        if os.path.exists(src) and not os.path.exists(dst):
-            os.rename(src, dst)
-            moved += 1
-    return moved
 
 
 def download_pdfs(cdp: CDPClient, manifest_path: str, output_dir: str = ".", chunk_size: int = 15, retry_count: int = 1):

@@ -236,15 +236,4 @@ python3 scripts/ebsco_pipeline.py download --manifest ./refs/papers.json --chunk
 
 # 4. Results
 ls ./refs/*.pdf          # PDFs saved directly to --output dir
-cat papers/manifest.csv    # Paper metadata
-```
-python3 scripts/ebsco_pipeline.py search "innovation OR patent OR R&D OR \"intellectual property\" OR inventor" \
-  --journals "American Economic Review,Quarterly Journal of Economics,Journal of Political Economy,Econometrica,Review of Economic Studies" \
-  --years 2022-2026 --max 500 --output ./refs/
-
-# 3. Download PDFs (parallel fetch + base64 decode, 15 per chunk)
-python3 scripts/ebsco_pipeline.py download --manifest ./refs/papers.json --chunk-size 15
-
-# 4. Results
-ls ./refs/*.pdf          # Named PDFs
-cat papers/manifest.csv    # Paper metadata
+cat refs/manifest.csv    # Paper metadata
