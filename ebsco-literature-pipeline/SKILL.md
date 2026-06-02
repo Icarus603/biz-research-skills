@@ -69,7 +69,7 @@ python3 scripts/ebsco_pipeline.py search "innovation OR patent OR R&D" \
   --journals "American Economic Review,Quarterly Journal of Economics,Journal of Political Economy,Econometrica,Review of Economic Studies" \
   --years 2022-2026 \
   --max 500 \
-  --output ./papers/
+  --output ./refs/
 ```
 
 ### What it does
@@ -115,8 +115,8 @@ EBSCO's `SO` field does **substring matching** (e.g., `SO "Journal of Political 
 
 ```bash
 python3 scripts/ebsco_pipeline.py download \
-  --manifest ./papers/papers.json \
-  --output ./papers/ \
+  --manifest ./refs/papers.json \
+  --output ./refs/ \
   --chunk-size 15 \
   --retry 2
 ```
@@ -229,22 +229,22 @@ chmod 600 ~/.cufe_credentials
 # 2. Just run — Chrome auto-starts, auto-logs in
 python3 scripts/ebsco_pipeline.py search "innovation OR patent OR R&D OR \"intellectual property\" OR inventor" \
   --journals "American Economic Review,Quarterly Journal of Economics,Journal of Political Economy,Econometrica,Review of Economic Studies" \
-  --years 2022-2026 --max 500 --output ./papers/
+  --years 2022-2026 --max 500 --output ./refs/
 
 # 3. Download PDFs (parallel fetch + base64 decode, 15 per chunk)
-python3 scripts/ebsco_pipeline.py download --manifest ./papers/papers.json --chunk-size 15
+python3 scripts/ebsco_pipeline.py download --manifest ./refs/papers.json --chunk-size 15
 
 # 4. Results
-ls ./papers/*.pdf          # PDFs saved directly to --output dir
+ls ./refs/*.pdf          # PDFs saved directly to --output dir
 cat papers/manifest.csv    # Paper metadata
 ```
 python3 scripts/ebsco_pipeline.py search "innovation OR patent OR R&D OR \"intellectual property\" OR inventor" \
   --journals "American Economic Review,Quarterly Journal of Economics,Journal of Political Economy,Econometrica,Review of Economic Studies" \
-  --years 2022-2026 --max 500 --output ./papers/
+  --years 2022-2026 --max 500 --output ./refs/
 
 # 3. Download PDFs (parallel fetch + base64 decode, 15 per chunk)
-python3 scripts/ebsco_pipeline.py download --manifest ./papers/papers.json --chunk-size 15
+python3 scripts/ebsco_pipeline.py download --manifest ./refs/papers.json --chunk-size 15
 
 # 4. Results
-ls ./papers/*.pdf          # Named PDFs
+ls ./refs/*.pdf          # Named PDFs
 cat papers/manifest.csv    # Paper metadata

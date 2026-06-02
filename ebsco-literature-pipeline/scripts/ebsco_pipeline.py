@@ -706,12 +706,12 @@ def main():
     sp.add_argument("--journals", default="", help="Comma-separated journal names")
     sp.add_argument("--years", default="2022-2026", help="Date range")
     sp.add_argument("--max", type=int, default=500, help="Max papers to retrieve")
-    sp.add_argument("--output", "-o", default="./papers", help="Output directory")
+    sp.add_argument("--output", "-o", default="./refs", help="Output directory")
 
     # download subcommand
     dp = sub.add_parser("download")
     dp.add_argument("--manifest", required=True, help="Path to papers.json or manifest.csv")
-    dp.add_argument("--output", "-o", default="./papers", help="Output directory for PDFs")
+    dp.add_argument("--output", "-o", default="./refs", help="Output directory for PDFs")
     dp.add_argument("--chunk-size", type=int, default=15, help="PDFs per chunk (default 15)")
     dp.add_argument("--retry", type=int, default=1, help="Retry count for transient failures (default 1)")
 
