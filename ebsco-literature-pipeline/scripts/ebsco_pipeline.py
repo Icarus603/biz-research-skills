@@ -813,6 +813,12 @@ def download_pdfs(cdp: CDPClient, manifest_path: str, output_dir: str = ".", chu
             print("[download] All PDFs already downloaded.")
             return len(pdf_papers)
 
+        # Session stability warning for large downloads
+        if len(pending) > 100:
+            print(f"[download] ⚠  {len(pending)} PDFs pending — CDP session may degrade.")
+            print(f"[download] ⚠  If download stalls, kill & re-run. downloaded.json dedup ensures forward progress.")
+            print(f"[download] ⚠  Expect 2–4 runs for reliable completion.")
+
         # Build chunk items for all pending papers
         pending_dois = {}  # idx → doi for sidecar recording
         all_items = []
@@ -1097,7 +1103,7 @@ def main():
     dp.add_argument("--manifest", required=True, help="Path to papers.json or manifest.csv")
     dp.add_argument("--output", "-o", default=None, help="Output directory for PDFs (default: <manifest_dir>/pdfs/)")
     dp.add_argument("--chunk-size", type=int, default=15, help="PDFs per chunk (default 15)")
-    dp.add_argument("--retry", type=int, default=1, help="Retry count for transient failures (default 1)")
+    dp.add_argument("--retry", type=int, default=2, help="Retry count for transient failures (default 2)")
 
     args = parser.parse_args()
 

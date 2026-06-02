@@ -184,6 +184,30 @@ python3 scripts/ebsco_pipeline.py download \
   --retry 2
 ```
 
+### Session Batching — CRITICAL for large downloads
+
+CDP WebSocket sessions degrade over time (connection drops, eval timeouts). The **`downloaded.json` sidecar enables safe multi-run batching** — each run skips already-downloaded papers via DOI dedup, so you never re-download.
+
+| PDF count | Strategy |
+|-----------|----------|
+| ≤100 | Single run. `--chunk-size 15 --retry 2`. |
+| 100–200 | Plan for 2 runs. Restart Chrome between runs for safety. |
+| 200+ | Split into 3–4 runs of 60–80 each. Restart Chrome between batches. |
+
+**How to batch**: run the SAME `download` command repeatedly. No separate manifest files needed.
+
+```bash
+# Run 1: downloads first ~80 PDFs, may stall. That's expected.
+python3 scripts/ebsco_pipeline.py download \
+  --manifest ./refs/my-project/papers.json --chunk-size 15 --retry 2
+
+# If stalled >3 min at same count: kill (Ctrl+C), restart, run again.
+# Already-downloaded papers skipped automatically via downloaded.json.
+# Repeat until "All PDFs already downloaded" appears.
+```
+
+**For agents**: when downloading >100 PDFs, plan for 2–4 sequential `download` runs. Check progress with `ls pdfs/*.pdf | wc -l` between runs. If a run stalls for >3 minutes at the same PDF count, kill it and restart with the same command. The sidecar guarantees forward progress.
+
 ### What it does
 
 1. Reads `papers.json`, finds papers with `has_pdf: true` and valid `pdf_url`
@@ -262,7 +286,7 @@ Complete API reference for EBSCO Search API accessed via CUFE WebVPN proxy.
 | Title-only queries on EBSCO | Low recall vs. domain search with SO+DT filters |
 | `window.open` for PDF download | Popup blocker + no filename control |
 | iframe-based PDF download | Downloads HTML pages, not PDF content |
-| Downloading 500+ PDFs in one chunk | Timeout. Use `--chunk-size 15` (default) |
+| Single download run for 200+ PDFs | CDP WebSocket session degrades over time — eval calls start timing out. Split into 2–4 runs via `downloaded.json` dedup (see Session Batching above). |
 | Blob URL + `<a download>` click | Chrome doesn't reliably save blob URL downloads to disk. Use base64 return instead. |
 
 ---
