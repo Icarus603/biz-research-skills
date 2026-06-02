@@ -16,6 +16,10 @@ Parallel literature digest for rapid topic scouting.
               writes digest.md (synthesis — gaps, themes, ideas)
 ```
 
+> **STOP — READ THIS FIRST**
+>
+> Phase 0 is NOT optional. You MUST use `AskUserQuestion` to ask the user about the research focus question before touching any PDFs. Do not auto-analyze, auto-detect, or assume. If you find yourself reading a PDF without having asked the focus question, you have made an error. Go back and ask.
+
 ## PDF Location Convention
 
 **Lit-scout reads PDFs from `refs/{project-slug}/pdfs/`** — matching ebsco-literature-pipeline's output. If that directory doesn't exist, fall back to `refs/` root.
@@ -26,13 +30,66 @@ Notes are always written to `{pdf_dir}/../notes/` — i.e., `refs/{project-slug}
 
 ## Phase 0: Setup
 
-Ask user (combine into one message if multiple unknowns):
-- **PDF folder** — check `refs/{project-slug}/pdfs/` first (ebsco convention), fallback `refs/`
-- **Focus question** (optional) — specific angle, e.g. "AI and labor market". Leave blank = extract everything.
+**MANDATORY — DO NOT SKIP. This phase MUST complete before any PDF reading begins.**
 
-Load `manifest.csv` from `refs/{project-slug}/` (or `refs/` if no slug) — use for author/year/venue without reading PDFs.
+### Step 0.1: Locate PDFs and load manifest
 
-List all `*.pdf` files. Report count. If > 30, warn: "Found N papers — will spawn N subagents in parallel. Continue?"
+1. Find PDF folder: check `refs/*/pdfs/` (ebsco convention). If exactly one slug → use it. If multiple → ask user which project. Fallback: `refs/` root.
+2. Load `manifest.csv` from `refs/{slug}/` — this contains `first_author`, `year`, `title`, `venue`, `subjects`, `has_pdf`.
+3. List all `*.pdf` files. Report count.
+
+### Step 0.2: Infer research directions from chat context + manifest
+
+**DO NOT hardcode options.** Use TWO sources to infer 3–5 smart focus directions:
+
+**Source 1 — Chat context (primary):**
+- What has the user been discussing in this conversation? What research questions interest them?
+- What project are they working on? What variables / mechanisms / policies do they care about?
+- The user likely discussed their research agenda earlier in the chat — USE IT.
+
+**Source 2 — Manifest (grounding):**
+- Scan `title` and `subjects` columns in manifest.csv
+- Identify recurring themes, keywords, clusters (e.g., patent/innovation/automation/labor/trade/climate)
+- Cross-reference with chat context: which themes in the corpus align with the user's interests?
+
+**Synthesize:** Produce 3–5 directions that:
+1. Align with what the user cares about (from chat context)
+2. Are actually covered by papers in the corpus (from manifest)
+3. Each has: short label + 1-sentence description + rough paper count
+
+If the chat context is empty or the user has not discussed research interests, fall back to manifest-only clustering:
+
+```
+scan titles + subjects → cluster by keyword frequency → top 3-5 clusters
+```
+
+If the corpus is too diverse to cluster meaningfully, say so and offer "全覆盖" as the default.
+
+### Step 0.3: Ask user with AskUserQuestion (REQUIRED)
+
+Use `AskUserQuestion` with these questions:
+
+**Question 1 — Research focus** (single-select):
+- The 3–5 dynamically-inferred directions from Step 0.2
+- "全覆盖，不设焦点" — read all papers with standard template
+- "自定义" — user types their own focus question (the "Other" option)
+
+**Question 2 — Scope** (only ask if >30 PDFs, single-select):
+- "全部处理" — process ALL papers
+- "限制数量" — user specifies N (ask in follow-up or via "Other")
+
+**Question 3 — PDF folder** (only ask if ambiguous，single-select):
+- Confirm the detected slug or let user pick.
+
+**Combine into ONE AskUserQuestion call** with 1–3 questions as needed.
+
+If the user provides a custom focus question (via "Other"), use that directly. If they choose "全覆盖", no special angle — extract everything equally.
+
+### Step 0.4: Create notes directory
+
+`mkdir -p {pdf_dir}/../notes/`
+
+**Checkpoint**: You MUST have the user's answers to ALL questions before entering Phase 1. If you find yourself reading a PDF without having asked, STOP — you made an error.
 
 ---
 
