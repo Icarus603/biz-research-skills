@@ -245,10 +245,13 @@ EBSCO is a SUPPLEMENT, not the primary search. Run ONE EBSCO pass only when:
   seems high, or a niche journal).
 
 ```bash
-# Anchor on DE (controlled vocab) + TI/AB. Merge into the supplement dir.
+# Anchor on DE (controlled vocab) + TI/AB. API uses facet filters by default:
+# --profile bsc, --database-scope econ (eoh,bth,edb), --source-type academic,
+# and Journal facet filters from --journals. Do NOT add SO clauses unless debugging.
 python3 scripts/ebsco_pipeline.py search "DE \"Patents\" OR DE \"Intellectual Property\" OR TI patent OR AB patent OR TI inventor" \
   --journals "American Economic Review,Quarterly Journal of Economics,Journal of Political Economy,Econometrica,Review of Economic Studies" \
   --years 2022-2026 --max 500 \
+  --profile bsc --database-scope econ --source-type academic \
   --output ./refs/{slug}/supplement/
 ```
 
@@ -270,8 +273,23 @@ the canonical `refs/{slug}/papers.json` (dedup by DOI / ebsco_id) before downloa
 | `RV` | Peer reviewed | `RV y` (also `--peer-reviewed`) |
 | `N{n}` / `W{n}` | Near / Within | `patent N5 litigation` |
 
-EBSCO `SO` does **substring matching**; the pipeline auto-filters to exact journal
-matches. Full reference: `references/ebsco_search_api.md`.
+EBSCO `SO` does **substring matching**; default search now uses API `filters`
+(`Journal`, `databases`, `sourceTypes`) before Python post-filtering. Use `--use-so-query`
+only for debugging or legacy comparisons. Full reference: `references/ebsco_search_api.md`.
+
+### API search defaults (important)
+
+`search` defaults are tuned to reduce noise:
+
+| CLI flag | Default | Effect |
+|---|---|---|
+| `--profile` | `bsc` | Business Source Complete (`4s3yq5`), cleaner than EBSCO-ALL |
+| `--database-scope` | `econ` | API filter to `eoh,bth,edb` (EconLit/BSC/Complementary Index) |
+| `--source-type` | `academic` | API filter to academic journals (`160MN`) |
+| `--journals` | user-supplied | API `Journal` facet filter + Python exact-match post-filter |
+| `--use-so-query` | off | Avoids `SO` substring leakage into adjacent journals |
+
+Never use `smartText` for Boolean/fielded queries; it creates huge noisy result sets.
 
 ---
 
@@ -399,6 +417,9 @@ NOT used for discovery (kept for reference only; WebSearch-only policy supersede
 | **Manually killing or starting Chrome** | `ensure_chrome()` uses `--headless=new` + dedicated profile. Manual `killall` destroys the user's normal Chrome session. |
 | **One web agent / one query** | A broad topic is a union of angles. Fan out 5-7 agents across sources + angles; loop until the exhaustion gate. |
 | `curl` standalone EBSCO API calls | VPN binds SSO to the TLS session. |
+| Using broad `--profile all` for discovery | EBSCO-ALL mixes Gale, USPTO, repos, news, and non-target databases. Use default `--profile bsc --database-scope econ` unless resolving/downloading requires broader fallback. |
+| Stuffing journal names only into `SO` query clauses | `SO` substring matching leaks adjacent journals and pollutes ranking. Use default API `Journal` facet filters from `--journals`; add `--use-so-query` only for legacy comparison. |
+| Searching `patent AND text` for patent-text empirical work | Returns patent citations, IP law, claims, and generic abstract text. Use method anchors (`latent semantic`, `text-based`, `patent corpus`, `full text`, `claims`) and PDF-read inclusion gate. |
 | **Stopping after ONE discovery round on a broad ask** | The user said "all / 多多益善". Run the full angle plan + exhaustion gate before resolving. |
 | **Asking "want more?" instead of doing more** | If the user requested exhaustive coverage, fire the next round yourself. Ask only AFTER the gate is met. |
 | **Stopping download after ONE epoch** | One run never fetches every PDF — CDP sessions degrade, EBSCO stalls, chunks time out. Run epoch after epoch (sidecar resumes) until on-disk count = TARGET or two epochs add 0 new. See Phase 5. |

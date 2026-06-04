@@ -23,14 +23,19 @@ Primary search endpoint. Full-text search across EBSCO databases.
 
 ```json
 {
-  "query": "SO \"American Economic Review\" AND innovation AND DT 2022-2026",
-  "profileIdentifier": "k3svp7",
+  "query": "innovation AND DT 2022-2026",
+  "profileIdentifier": "4s3yq5",
   "searchMode": "all",
   "sort": "relevance",
   "offset": 0,
   "count": 50,
   "userDirectAction": true,
-  "expanders": ["fullText", "concept"]
+  "expanders": ["fullText", "concept"],
+  "filters": [
+    {"id": "databases", "values": ["eoh", "bth", "edb"]},
+    {"id": "sourceTypes", "values": ["160MN"]},
+    {"id": "Journal", "values": ["american economic review"]}
+  ]
 }
 ```
 
@@ -44,6 +49,19 @@ Primary search endpoint. Full-text search across EBSCO databases.
 | `count` | int | Items per page (max 50) |
 | `userDirectAction` | bool | Must be `true` |
 | `expanders` | string[] | `"fullText"`, `"concept"` confirmed. `"thesaurus"` returns 400 |
+| `filters` | array | Facet filters. Confirmed working ids: `databases`, `sourceTypes`, `Journal`. |
+
+### Confirmed filter values
+
+| Filter id | Useful values | Notes |
+|-----------|---------------|-------|
+| `databases` | `eoh` (EconLit with Full Text), `bth` (Business Source Complete), `edb` (Complementary Index) | Use `eoh,bth,edb` for econ/business discovery. Avoid broad EBSCO-ALL noise when possible. |
+| `sourceTypes` | `160MN` | Academic journals. |
+| `Journal` | lowercase journal facet labels, e.g. `american economic review`, `quarterly journal of economics`, `journal of political economy`, `econometrica`, `review of economic studies` | More precise than `SO` substring matching. |
+
+Only request-body key `filters` works. Tested and ineffective: `facetFilters`, `appliedFacets`, `selectedFacets`, `databaseIds`, top-level `sourceTypes`.
+
+`searchMode: "smartText"` is not appropriate for Boolean queries; it treats fielded syntax as natural language and returns huge noisy result sets. Use `searchMode: "all"`.
 
 ### Query syntax (EBSCO field codes)
 

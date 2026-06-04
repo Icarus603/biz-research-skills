@@ -334,16 +334,76 @@ def _save_cookies(cdp: CDPClient, cookie_file: str):
 
 # ── Search JS (runs in browser via CDP) ─────────────────────────
 
+EBSCO_PROFILES = {
+    "all": "k3svp7",      # EBSCO-ALL: broad, noisy; best for resolve/download fallback
+    "bsc": "4s3yq5",      # Business Source Complete: cleaner for business/econ discovery
+    "general": "cojp6y",  # General institutional profile
+}
+
+# Facet/database filters confirmed against POST /api/search/v1/search.
+# Only the request-body key `filters` works; facetFilters/appliedFacets/databaseIds do not.
+DATABASE_FILTERS = {
+    "econ": ["eoh", "bth", "edb"],  # EconLit with Full Text, Business Source Complete, Complementary Index
+    "bsc": ["bth"],
+    "econlit": ["eoh"],
+    "none": [],
+}
+
+SOURCE_TYPE_FILTERS = {
+    "academic": ["160MN"],
+    "none": [],
+}
+
+
+def _norm_facet_value(value: str) -> str:
+    """Normalize values for EBSCO facet filters (Journal facet expects lowercase labels)."""
+    return value.strip().lower()
+
+
+def _build_filters(journals: list[str], database_scope: str, source_type_scope: str,
+                   use_journal_filter: bool = True) -> list[dict]:
+    filters = []
+    db_values = DATABASE_FILTERS.get(database_scope)
+    if db_values is None:
+        raise ValueError(f"Unknown database scope: {database_scope}. Choose: {', '.join(DATABASE_FILTERS)}")
+    if db_values:
+        filters.append({"id": "databases", "values": db_values})
+
+    st_values = SOURCE_TYPE_FILTERS.get(source_type_scope)
+    if st_values is None:
+        raise ValueError(f"Unknown source type scope: {source_type_scope}. Choose: {', '.join(SOURCE_TYPE_FILTERS)}")
+    if st_values:
+        filters.append({"id": "sourceTypes", "values": st_values})
+
+    if use_journal_filter and journals:
+        filters.append({"id": "Journal", "values": [_norm_facet_value(j) for j in journals]})
+
+    return filters
+
+
 def build_search_js(query: str, journals: list[str], years: str, max_count: int = 500,
-                    full_text_only: bool = False, peer_reviewed_only: bool = False) -> str:
+                    full_text_only: bool = False, peer_reviewed_only: bool = False,
+                    profile: str = "bsc", database_scope: str = "econ",
+                    source_type_scope: str = "academic", use_so_query: bool = False,
+                    use_journal_filter: bool = True) -> str:
     """Build the bundled JavaScript for EBSCO search."""
-    so_clause = " OR ".join(f'SO "{j}"' for j in journals)
-    q = f"({so_clause}) AND ({query}) AND DT {years}"
+    clauses = []
+    if use_so_query and journals:
+        so_clause = " OR ".join(f'SO "{j}"' for j in journals)
+        clauses.append(f"({so_clause})")
+    clauses.append(f"({query})")
+    clauses.append(f"DT {years}")
+    q = " AND ".join(clauses)
     if full_text_only:
         q = f"({q}) AND FT y"
     if peer_reviewed_only:
         q = f"({q}) AND RV y"
+
+    profile_id = EBSCO_PROFILES.get(profile, profile)
+    filters = _build_filters(journals, database_scope, source_type_scope, use_journal_filter)
     print(f"[search] Built query: {q[:200]}...")
+    print(f"[search] API profile: {profile} ({profile_id})")
+    print(f"[search] API filters: {filters or 'none'}")
 
     # Use a template file to avoid Python f-string brace hell
     js_template = '''async () => {
@@ -351,6 +411,8 @@ def build_search_js(query: str, journals: list[str], years: str, max_count: int 
     const API = BASE + '/api/search/v1/search?applyAllLimiters=true';
     const QUERY = __QUERY__;
     const MAX = __MAX__;
+    const PROFILE = __PROFILE__;
+    const FILTERS = __FILTERS__;
 
     const allPapers = [];
     const seen = new Set();
@@ -365,13 +427,14 @@ def build_search_js(query: str, journals: list[str], years: str, max_count: int 
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 query: QUERY,
-                profileIdentifier: 'k3svp7',
+                profileIdentifier: PROFILE,
                 searchMode: 'all',
                 sort: 'relevance',
                 offset: offset,
                 count: PER_PAGE,
                 userDirectAction: true,
-                expanders: ['fullText', 'concept']
+                expanders: ['fullText', 'concept'],
+                filters: FILTERS
             })
         });
         const data = await resp.json();
@@ -388,6 +451,7 @@ def build_search_js(query: str, journals: list[str], years: str, max_count: int 
         }
 
         for (const item of items) {
+            if (allPapers.length >= MAX) break;
             const doi = item.doi || null;
             const key = doi || item.an || item.id;
             if (seen.has(key)) continue;
@@ -399,7 +463,7 @@ def build_search_js(query: str, journals: list[str], years: str, max_count: int 
             const year = (item.publicationDate || item.coverDate || '').slice(0, 4);
             const hasPDF = item.links?.downloadLinks?.some(l => l.type === 'pdf') || false;
             const pdfUrl = hasPDF
-                ? BASE + '/api/search/v1/record/' + item.id + '/fulltext/pdf?sourceRecordId=' + item.id + '&opid=k3svp7&intent=download'
+                ? BASE + '/api/search/v1/record/' + item.id + '/fulltext/pdf?sourceRecordId=' + item.id + '&opid=' + PROFILE + '&intent=download'
                 : null;
 
             // Extract subjects (DE = descriptors/keywords)
@@ -437,7 +501,11 @@ def build_search_js(query: str, journals: list[str], years: str, max_count: int 
         papers: allPapers
     };
 }'''
-    return js_template.replace('__QUERY__', json.dumps(q)).replace('__MAX__', str(max_count))
+    return (js_template
+            .replace('__QUERY__', json.dumps(q))
+            .replace('__MAX__', str(max_count))
+            .replace('__PROFILE__', json.dumps(profile_id))
+            .replace('__FILTERS__', json.dumps(filters)))
 
 
 def cmd_status(directory: str = "./refs"):
@@ -486,31 +554,43 @@ def cmd_status(directory: str = "./refs"):
     else:
         print(f"[status] pdfs/: not found (no PDFs downloaded)")
 
-    # Check for search/ and supplement/ subdirs
-    for sub in ["search", "supplement"]:
+    # Check for web/ and supplement/ subdirs
+    subdir_has_papers = False
+    for sub in ["web", "supplement"]:
         sub_dir = os.path.join(d, sub)
         if os.path.isdir(sub_dir):
             jf = os.path.join(sub_dir, "papers.json")
             if os.path.exists(jf):
                 with open(jf) as f:
                     sp = json.load(f)
+                subdir_has_papers = True
                 print(f"[status] {sub}/: {len(sp)} papers")
+            else:
+                print(f"[status] {sub}/: directory exists, papers.json not found")
         elif sub == "supplement":
             pass  # optional
         else:
             print(f"[status] {sub}/: not found")
 
-    if not papers and not os.path.isdir(pdf_dir):
+    if not papers and not subdir_has_papers and not os.path.isdir(pdf_dir):
         print(f"[status] → Empty project. Ready for fresh search.")
 
 
 def search(cdp: CDPClient, query: str, journals: list[str], years: str,
             max_count: int = 500, output_dir: str = ".", merge_with_existing: bool = False,
-            full_text_only: bool = False, peer_reviewed_only: bool = False):
+            full_text_only: bool = False, peer_reviewed_only: bool = False,
+            profile: str = "bsc", database_scope: str = "econ",
+            source_type_scope: str = "academic", use_so_query: bool = False,
+            use_journal_filter: bool = True):
     """Run EBSCO search and save results."""
     print(f"[search] Query: {query}")
     print(f"[search] Journals: {journals}")
     print(f"[search] Date range: {years}")
+    print(f"[search] Profile: {profile}")
+    print(f"[search] Database scope: {database_scope}")
+    print(f"[search] Source type scope: {source_type_scope}")
+    print(f"[search] Journal facet filter: {'on' if use_journal_filter else 'off'}")
+    print(f"[search] SO query filter: {'on' if use_so_query else 'off'}")
 
     # Warn if SO terms are in query but --journals not used
     if not journals:
@@ -526,7 +606,9 @@ def search(cdp: CDPClient, query: str, journals: list[str], years: str,
     if peer_reviewed_only:
         print(f"[search] Limiter: RV y (peer reviewed only)")
 
-    js = build_search_js(query, journals, years, max_count, full_text_only, peer_reviewed_only)
+    js = build_search_js(query, journals, years, max_count, full_text_only, peer_reviewed_only,
+                         profile, database_scope, source_type_scope, use_so_query,
+                         use_journal_filter)
     print(f"[search] Running search (max {max_count} papers)...")
 
     result = cdp.eval(js, await_promise=True, timeout_ms=300_000)
@@ -1331,6 +1413,16 @@ def main():
     sp.add_argument("--merge", action="store_true", help="Merge with existing papers.json instead of overwriting")
     sp.add_argument("--full-text", action="store_true", help="Only return papers with full text available (FT y)")
     sp.add_argument("--peer-reviewed", action="store_true", help="Only return peer-reviewed papers (RV y)")
+    sp.add_argument("--profile", default="bsc", choices=sorted(EBSCO_PROFILES),
+                    help="EBSCO profile: bsc (default, cleaner), general, or all (broad/noisy)")
+    sp.add_argument("--database-scope", default="econ", choices=sorted(DATABASE_FILTERS),
+                    help="API database facet filter: econ (default: eoh,bth,edb), bsc, econlit, none")
+    sp.add_argument("--source-type", default="academic", choices=sorted(SOURCE_TYPE_FILTERS),
+                    help="API source type facet filter: academic (default) or none")
+    sp.add_argument("--use-so-query", action="store_true",
+                    help="Also add SO \"Journal\" clauses to query. Default uses Journal facet filter only.")
+    sp.add_argument("--no-journal-filter", action="store_true",
+                    help="Disable API Journal facet filter; post-search Python journal filter still runs if --journals is set.")
 
     # status subcommand
     stp = sub.add_parser("status", help="Check existing content in a project directory")
@@ -1354,6 +1446,10 @@ def main():
     if not args.command:
         parser.print_help()
         sys.exit(1)
+
+    if args.command == "status":
+        cmd_status(args.directory)
+        return
 
     # Auto-start Chrome if needed
     ensure_chrome()
@@ -1384,10 +1480,8 @@ def main():
                 print("Warning: No --journals specified. Searching all sources.")
             setup_session(cdp)
             search(cdp, args.query, journals, args.years, args.max, args.output, args.merge,
-                   args.full_text, args.peer_reviewed)
-
-        elif args.command == "status":
-            cmd_status(args.directory)
+                   args.full_text, args.peer_reviewed, args.profile, args.database_scope,
+                   args.source_type, args.use_so_query, not args.no_journal_filter)
 
         elif args.command == "resolve":
             setup_session(cdp)
