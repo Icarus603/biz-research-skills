@@ -29,9 +29,24 @@ Generic dirname list: `~`, `home`, `Desktop`, `Documents`, `code`, `dev`, `proje
 ## Phase 1: Detect OS + Tools (merged)
 
 ```bash
-uname -s 2>/dev/null || echo "WINDOWS"
-for tool in stata R uv python3 git; do
-  which $tool 2>/dev/null && echo "$tool:yes" || echo "$tool:no"
+OS=$(uname -s 2>/dev/null || echo "WINDOWS")
+echo "$OS"
+
+# Stata detection must handle macOS GUI installs. Stata often has no `stata`
+# CLI on PATH; official app bundle lives under /Applications/Stata/Stata*.app.
+stata_found=no
+for bin in stata StataMP StataSE StataBE StataIC; do
+  if command -v "$bin" >/dev/null 2>&1; then stata_found=yes; break; fi
+done
+if [ "$stata_found" = no ] && [ "$OS" = Darwin ]; then
+  for app in /Applications/Stata/Stata*.app /Applications/Stata*.app "$HOME"/Applications/Stata/Stata*.app "$HOME"/Applications/Stata*.app; do
+    [ -d "$app" ] && stata_found=yes && break
+  done
+fi
+echo "stata:$stata_found"
+
+for tool in R uv python3 git; do
+  command -v "$tool" >/dev/null 2>&1 && echo "$tool:yes" || echo "$tool:no"
 done
 ```
 
